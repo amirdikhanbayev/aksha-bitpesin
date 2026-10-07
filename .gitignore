@@ -1,0 +1,29 @@
+# Secrets — the real configuration (bot token, database URL) lives here and must
+# never be committed. .env.example is the template and stays tracked.
+.env
+.env.*
+!.env.example
+
+# Build output
+bin/
+*.exe
+*.test
+*.out
+
+# Coverage and profiling
+coverage.*
+*.prof
+
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs and scratch
+*.log
+tmp/

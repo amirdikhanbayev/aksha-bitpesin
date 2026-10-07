@@ -1,0 +1,43 @@
+
+services:
+  bot:
+    build: .
+    image: aksha-bitpesin
+    container_name: aksha-bitpesin
+    restart: unless-stopped
+
+    env_file:
+      - path: .env
+        # Values taken literally, as `make run` reads them: no quote stripping,
+        # no $-expansion. Compose 2.30+; IDEA's compose schema doesn't know the
+        # key yet and marks it red — that is the IDE, not an error.
+        format: raw
+
+    ports:
+      - "127.0.0.1:8080:8080"
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    # proxy: nginx's network, so nginx reaches the webhook at aksha-bitpesin:8080.
+    # default: the bot's own network, kept for host.docker.internal.
+    networks: [proxy, default]
+
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    pids_limit: 256
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  proxy:
+    external: true
+    # The network nginx runs in, as `docker network ls | grep proxy` shows it
+    # (compose prefixes the folder name, e.g. nginx_proxy-network).
+    name: nginx_proxy-network

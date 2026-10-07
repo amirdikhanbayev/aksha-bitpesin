@@ -1,0 +1,12 @@
+.git
+.gitignore
+.idea
+# Secrets stay out of the build context and so out of the image: settings are
+# passed at run time by docker-compose.yml.
+.env
+.env.*
+bin/
+*.md
+Makefile
+Dockerfile
+docker-compose.yml
