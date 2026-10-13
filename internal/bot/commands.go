@@ -33,7 +33,7 @@ None come with the bot. The first time, you name one in your own words — start
 Tap <b>💱 Another currency</b> before the amount. The bot then asks <b>how much actually left the account, or what rate you got</b> — every bank and exchange has its own rate, and the bot never substitutes one. A transfer between currencies asks the same.
 
 <b>Got it wrong?</b>
-Every operation's card can change anything: <b>💰 Amount</b>, <b>📅 Date</b>, <b>🏷 Category</b>, <b>💳 Account</b>, <b>🧑 Source</b>, <b>📝 Note</b>, <b>🗑 Delete</b>. For something recorded earlier, open /last or 🔍 Search and tap it. Moving an operation to an account in another currency asks for the amount again — the old number wouldn't mean the same there.
+Every operation's card can change anything: <b>💰 Amount</b>, <b>📅 Date</b>, <b>🏷 Category</b>, <b>💳 Account</b>, <b>🧑 Source</b>, <b>📝 Note</b>, <b>🗑 Delete</b>. For something recorded earlier, open 💳 Accounts → <b>🧾 Operations</b> (each account, 15 to a page), /last or 🔍 Search and tap it. Moving an operation to an account in another currency asks for the amount again — the old number wouldn't mean the same there.
 
 <b>▶️ Continue</b> on a card records the next one on the same account: send the amount, then pick its category.
 

@@ -31,7 +31,8 @@ func (b *Bot) cmdAccounts(ctx context.Context, u storage.User, chatID int64) {
 		btn("➕ New account", "newacc"),
 		btn("✏️ Edit", "accedit"),
 	}
-	b.send(ctx, chatID, sb.String(), inline(buttons))
+	b.send(ctx, chatID, sb.String(), inline(buttons,
+		[]models.InlineKeyboardButton{btn("🧾 Operations", "accops")}))
 }
 
 // accountsList renders the balances grouped by place, since one place can hold

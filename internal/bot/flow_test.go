@@ -247,7 +247,7 @@ func (p *person) tapFirstOperation() {
 	for _, m := range p.tg.visible() {
 		for _, row := range m.buttons {
 			for _, bt := range row {
-				if strings.HasPrefix(bt.CallbackData, "txshow:") {
+				if strings.HasPrefix(bt.CallbackData, "txshow:") || strings.HasPrefix(bt.CallbackData, "txopen:") {
 					p.tap(bt.Text)
 					return
 				}
@@ -1936,6 +1936,71 @@ func TestContinueOperation(t *testing.T) {
 	}
 	if txs[0].Amount != 1_200_00 || txs[0].CategoryName != "Transport" || txs[0].AccountName != "Kaspi" {
 		t.Errorf("the next one = %+v, want 1200 under Transport on Kaspi", txs[0])
+	}
+}
+
+// Each account's incomes and expenses are listed 15 to a page, and any of them
+// opens its card — so something from a week ago can still be corrected.
+func TestPlaceOperations(t *testing.T) {
+	st, ctx := openBotStore(t)
+	p := newPerson(t, st, 183)
+	u := userOf(t, st, ctx, p)
+	kaspi, err := st.CreateAccount(ctx, u.ID, "Kaspi", "KZT", 500_000_00)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cash, err := st.CreateAccount(ctx, u.ID, "Cash", "KZT", 500_000_00)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	// 20 on Kaspi, one a day going back; one on Cash that mustn't show up.
+	for i := 1; i <= 20; i++ {
+		if _, err := st.CreateTransaction(ctx, storage.Transaction{
+			UserID: u.ID, AccountID: kaspi.ID, Kind: storage.KindExpense,
+			Amount: int64(i) * 100_00, OccurredAt: now.AddDate(0, 0, -i),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.CreateTransaction(ctx, storage.Transaction{
+		UserID: u.ID, AccountID: cash.ID, Kind: storage.KindIncome,
+		Amount: 777_00, OccurredAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateTransfer(ctx, u.ID, kaspi.ID, cash.ID, 1_000_00, nil, nil, "", now); err != nil {
+		t.Fatal(err)
+	}
+
+	p.say("💳 Accounts")
+	p.tap("🧾 Operations")
+	p.tap("📌 Kaspi")
+	p.sees("20 in all · page 1 of 2") // transfers aren't incomes or expenses
+	if !p.hasButton("15") || p.hasButton("16") {
+		t.Fatalf("page 1 should have buttons 1–15.\n%s", p.screen())
+	}
+	if strings.Contains(plain(p.tg.visible()[0].text), "777") {
+		t.Error("another account's operation was listed")
+	}
+
+	p.tap("▶️")
+	p.sees("page 2 of 2")
+	if !p.hasButton("20") || p.hasButton("15") {
+		t.Fatalf("page 2 should have buttons 16–20.\n%s", p.screen())
+	}
+
+	// The 7th newest is a week old; open it from page 1 and correct it.
+	p.tap("◀️")
+	p.tap("7")
+	p.sees("−700 KZT")
+	p.tap("💰 Amount")
+	p.say("750")
+	p.sees("Amount corrected")
+
+	txs, _, err := st.PlaceTransactions(ctx, u.ID, kaspi.ID, 6, 1)
+	if err != nil || len(txs) != 1 || txs[0].Amount != 750_00 {
+		t.Errorf("the week-old one = %+v (%v), want 750", txs, err)
 	}
 }
 

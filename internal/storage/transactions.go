@@ -340,3 +340,39 @@ func (s *Store) MoveTransaction(ctx context.Context, userID, id, accountID int64
 	}
 	return nil
 }
+
+// PlaceTransactions pages through the incomes and expenses of one place — a
+// bank, cash — across every currency it holds; the place is named by any one of
+// its accounts. Newest first. It also returns how many there are in all, so the
+// caller can tell how many pages there are.
+func (s *Store) PlaceTransactions(ctx context.Context, userID, accountID int64,
+	offset, limit int) ([]Transaction, int, error) {
+
+	const where = `WHERE t.user_id = $1 AND t.deleted_at IS NULL
+		   AND t.kind IN ('income', 'expense')
+		   AND a.name = (SELECT name FROM accounts WHERE id = $2 AND user_id = $1)`
+
+	var total int
+	if err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM transactions t JOIN accounts a ON a.id = t.account_id `+where,
+		userID, accountID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+txCols+` `+txFrom+` `+where+`
+		 ORDER BY t.occurred_at DESC, t.id DESC
+		 OFFSET $3 LIMIT $4`, userID, accountID, offset, limit)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var out []Transaction
+	for rows.Next() {
+		t, err := scanTx(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, t)
+	}
+	return out, total, rows.Err()
+}

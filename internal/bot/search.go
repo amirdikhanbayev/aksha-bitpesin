@@ -119,9 +119,8 @@ func (b *Bot) inputSearch(ctx context.Context, u storage.User, chatID int64, tex
 	totals := map[string]int64{}
 	decimals := map[string]int{}
 	var order []string
+	sb.WriteString(numberedLines(txs, 0, loc))
 	for _, t := range txs {
-		sb.WriteString(txLine(t, loc))
-		sb.WriteByte('\n')
 		if t.Kind == storage.KindTransfer {
 			continue
 		}
@@ -146,5 +145,6 @@ func (b *Bot) inputSearch(ctx context.Context, u storage.User, chatID int64, tex
 		fmt.Fprintf(&sb, "\n<i>Showing the newest %d.</i>", maxSearchResults)
 	}
 
-	b.sendLong(ctx, chatID, sb.String(), operationsKeyboard(txs, loc))
+	sb.WriteString("\n<i>Tap a number to open it and change anything.</i>")
+	b.sendLong(ctx, chatID, sb.String(), inline(numberedButtons(txs, 0)...))
 }
