@@ -210,7 +210,7 @@ func (b *Bot) saveTransfer(ctx context.Context, u storage.User, chatID int64, d 
 		return
 	}
 	b.clearState(ctx, u.ID)
-	text, kb := b.cardOf(ctx, u, t)
+	text, kb := b.savedCardOf(ctx, u, t)
 	b.send(ctx, chatID, text, kb)
 }
 

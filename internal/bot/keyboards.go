@@ -107,19 +107,25 @@ func sourcesKeyboard(sources []string, prefix string) *models.InlineKeyboardMark
 
 // txCard — the card for a saved operation, with the buttons that correct it.
 // balance is the account's balance after the operation, or nil when unknown.
-func txCard(t storage.Transaction, balance *int64) (string, *models.InlineKeyboardMarkup) {
+// fresh marks the card shown right after recording; an operation opened later
+// from a list isn't announced as just recorded.
+func txCard(t storage.Transaction, balance *int64, fresh bool) (string, *models.InlineKeyboardMarkup) {
 	if t.LoanID != nil {
 		return loanTxCard(t, balance)
 	}
 	var b strings.Builder
 
+	what := "Transfer"
 	switch t.Kind {
 	case storage.KindIncome:
-		b.WriteString("✅ <b>Income recorded</b>\n\n")
+		what = "Income"
 	case storage.KindExpense:
-		b.WriteString("✅ <b>Expense recorded</b>\n\n")
-	default:
-		b.WriteString("✅ <b>Transfer recorded</b>\n\n")
+		what = "Expense"
+	}
+	if fresh {
+		fmt.Fprintf(&b, "✅ <b>%s recorded</b>\n\n", what)
+	} else {
+		fmt.Fprintf(&b, "🧾 <b>%s</b>\n\n", what)
 	}
 
 	if t.Kind == storage.KindTransfer {
@@ -193,7 +199,7 @@ func txCard(t storage.Transaction, balance *int64) (string, *models.InlineKeyboa
 				btn("🧑 Source", fmt.Sprintf("txsrc:%d", t.ID)),
 				btn("📝 Note", fmt.Sprintf("txnote:%d", t.ID)),
 			},
-			[]models.InlineKeyboardButton{btn("🔁 Again", fmt.Sprintf("txagain:%d", t.ID))},
+			[]models.InlineKeyboardButton{btn("▶️ Continue", fmt.Sprintf("txcont:%d", t.ID))},
 		)
 	}
 	rows = append(rows, []models.InlineKeyboardButton{btn("🗑 Delete", fmt.Sprintf("txdel:%d", t.ID))})

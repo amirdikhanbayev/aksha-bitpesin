@@ -247,7 +247,7 @@ func (p *person) tapFirstOperation() {
 	for _, m := range p.tg.visible() {
 		for _, row := range m.buttons {
 			for _, bt := range row {
-				if strings.HasPrefix(bt.CallbackData, "txshow:") {
+				if strings.HasPrefix(bt.CallbackData, "txshow:") || strings.HasPrefix(bt.CallbackData, "txopen:") {
 					p.tap(bt.Text)
 					return
 				}
@@ -364,7 +364,7 @@ func TestGuidedFlowFromScratch(t *testing.T) {
 	p.tap("📅 Date")
 	p.sees("When did it happen?")
 	p.tap("Yesterday")
-	p.sees("Expense recorded")
+	p.sees("🧾 Expense")
 	moved, _ := st.Transaction(ctx, u.ID, last[0].ID)
 	loc, _ := time.LoadLocation("Asia/Almaty")
 	want := time.Now().In(loc).AddDate(0, 0, -1).Format("2006-01-02")
@@ -682,7 +682,7 @@ func TestCategoryFromSuggestions(t *testing.T) {
 	p.say("⚙️ Settings")
 	p.tap("🏷 Categories")
 	p.sees("none yet — they appear as you name them")
-	p.tap("➕ Expense")
+	p.tap("➕ Expense category")
 	p.sees("expense category")
 	p.say("☕ Coffee")
 	p.sees("Category “☕ Coffee” created")
@@ -1368,7 +1368,7 @@ func TestCorrectAmountOfAConvertedOperation(t *testing.T) {
 
 	p.say("/last")
 	p.tapFirstOperation() // the list opens the card, so older operations are reachable too
-	p.sees("Expense recorded")
+	p.sees("🧾 Expense")
 	p.tap("💰 Amount")
 	p.sees("Currently 5,000 KZT") // the figure that was typed, not the debit
 	p.sees("recompute what left") // and it says what follows from it
@@ -1523,7 +1523,7 @@ func TestOlderOperationIsReachableFromTheList(t *testing.T) {
 	p.say("/last")
 	p.sees("Tap one to correct")
 	p.tapFirstOperation()
-	p.sees("Expense recorded")
+	p.sees("🧾 Expense")
 	p.sees("9,000 KZT")
 
 	p.tap("💰 Amount")
@@ -1870,7 +1870,10 @@ func TestSearch(t *testing.T) {
 	// And the results open their cards.
 	p.say("/search magnum")
 	p.tapFirstOperation()
-	p.sees("Expense recorded")
+	p.sees("🧾 Expense")
+	if strings.Contains(plain(p.tg.visible()[0].text), "recorded") {
+		t.Error("an operation opened from search is announced as just recorded")
+	}
 }
 
 func TestParseSearch(t *testing.T) {
@@ -1898,33 +1901,109 @@ func TestParseSearch(t *testing.T) {
 	}
 }
 
-// Repeating an operation carries over everything but the amount.
-func TestRepeatOperation(t *testing.T) {
+// Continue records the next operation on the same account, with its category
+// picked afresh rather than copied.
+func TestContinueOperation(t *testing.T) {
 	st, ctx := openBotStore(t)
 	p := newPerson(t, st, 181)
 	u := userOf(t, st, ctx, p)
 	if _, err := st.CreateAccount(ctx, u.ID, "Cash", "KZT", 100_000_00); err != nil {
 		t.Fatal(err)
 	}
-	withCategories(t, st, ctx, u, storage.KindExpense, "Coffee")
+	if _, err := st.CreateAccount(ctx, u.ID, "Kaspi", "KZT", 100_000_00); err != nil {
+		t.Fatal(err)
+	}
+	withCategories(t, st, ctx, u, storage.KindExpense, "Coffee", "Transport")
 
 	p.say("➖ Expense")
+	p.tap("📌 Kaspi · KZT")
 	p.say("900")
 	p.tap("☕ Coffee")
 	p.say("Starbucks")
 	p.sees("Expense recorded")
+	if p.hasButton("🔁 Again") {
+		t.Error("the card still offers Again")
+	}
 
-	p.tap("🔁 Again")
-	p.sees("☕ Coffee · Starbucks") // the same again, only the amount is asked
+	p.tap("▶️ Continue")
+	p.sees("Kaspi") // the same account, without asking for it
 	p.say("1200")
+	p.sees("Category?") // the category is asked, not copied
+	p.tap("🚕 Transport")
+	p.say("Yandex")
 	p.sees("Expense recorded")
 
 	txs, _ := st.LastTransactions(ctx, u.ID, 2)
 	if len(txs) != 2 {
 		t.Fatalf("operations = %d, want 2", len(txs))
 	}
-	if txs[0].Amount != 1_200_00 || txs[0].CategoryName != "Coffee" || txs[0].Source != "Starbucks" {
-		t.Errorf("the repeat = %+v, want 1200 under Coffee from Starbucks", txs[0])
+	if txs[0].Amount != 1_200_00 || txs[0].CategoryName != "Transport" || txs[0].AccountName != "Kaspi" {
+		t.Errorf("the next one = %+v, want 1200 under Transport on Kaspi", txs[0])
+	}
+}
+
+// Each account's incomes and expenses are listed 15 to a page, and any of them
+// opens its card — so something from a week ago can still be corrected.
+func TestPlaceOperations(t *testing.T) {
+	st, ctx := openBotStore(t)
+	p := newPerson(t, st, 183)
+	u := userOf(t, st, ctx, p)
+	kaspi, err := st.CreateAccount(ctx, u.ID, "Kaspi", "KZT", 500_000_00)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cash, err := st.CreateAccount(ctx, u.ID, "Cash", "KZT", 500_000_00)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	// 20 on Kaspi, one a day going back; one on Cash that mustn't show up.
+	for i := 1; i <= 20; i++ {
+		if _, err := st.CreateTransaction(ctx, storage.Transaction{
+			UserID: u.ID, AccountID: kaspi.ID, Kind: storage.KindExpense,
+			Amount: int64(i) * 100_00, OccurredAt: now.AddDate(0, 0, -i),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.CreateTransaction(ctx, storage.Transaction{
+		UserID: u.ID, AccountID: cash.ID, Kind: storage.KindIncome,
+		Amount: 777_00, OccurredAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateTransfer(ctx, u.ID, kaspi.ID, cash.ID, 1_000_00, nil, nil, "", now); err != nil {
+		t.Fatal(err)
+	}
+
+	p.say("💳 Accounts")
+	p.tap("🧾 Operations")
+	p.tap("📌 Kaspi")
+	p.sees("20 in all · page 1 of 2") // transfers aren't incomes or expenses
+	if !p.hasButton("15") || p.hasButton("16") {
+		t.Fatalf("page 1 should have buttons 1–15.\n%s", p.screen())
+	}
+	if strings.Contains(plain(p.tg.visible()[0].text), "777") {
+		t.Error("another account's operation was listed")
+	}
+
+	p.tap("▶️")
+	p.sees("page 2 of 2")
+	if !p.hasButton("20") || p.hasButton("15") {
+		t.Fatalf("page 2 should have buttons 16–20.\n%s", p.screen())
+	}
+
+	// The 7th newest is a week old; open it from page 1 and correct it.
+	p.tap("◀️")
+	p.tap("7")
+	p.sees("−700 KZT")
+	p.tap("💰 Amount")
+	p.say("750")
+	p.sees("Amount corrected")
+
+	txs, _, err := st.PlaceTransactions(ctx, u.ID, kaspi.ID, 6, 1)
+	if err != nil || len(txs) != 1 || txs[0].Amount != 750_00 {
+		t.Errorf("the week-old one = %+v (%v), want 750", txs, err)
 	}
 }
 
@@ -2171,7 +2250,7 @@ func TestAddingSeveralCategoriesInARow(t *testing.T) {
 	}
 
 	p.say("/categories")
-	p.tap("➕ Expense")
+	p.tap("➕ Expense category")
 	p.say("🛒 Groceries")
 	p.sees("Send the next name to add another")
 	p.say("🚕 Transport")
