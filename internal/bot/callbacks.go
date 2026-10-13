@@ -458,7 +458,7 @@ func (b *Bot) handleCallback(ctx context.Context, u storage.User, q *models.Call
 		b.answer(ctx, q, "")
 		b.moveToAccount(ctx, u, chatID, msgID, t, accountID, side)
 
-	case "txagain":
+	case "txcont", "txagain": // txagain: the button's old name, on cards sent before
 		id, err := parseID(arg)
 		if err != nil {
 			b.answer(ctx, q, "Unknown choice")
@@ -474,7 +474,7 @@ func (b *Bot) handleCallback(ctx context.Context, u storage.User, q *models.Call
 			return
 		}
 		b.answer(ctx, q, "")
-		b.repeatOperation(ctx, u, chatID, t)
+		b.continueOperation(ctx, u, chatID, t)
 
 	case "txnote":
 		id, err := parseID(arg)

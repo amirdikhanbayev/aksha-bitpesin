@@ -1898,33 +1898,44 @@ func TestParseSearch(t *testing.T) {
 	}
 }
 
-// Repeating an operation carries over everything but the amount.
-func TestRepeatOperation(t *testing.T) {
+// Continue records the next operation on the same account, with its category
+// picked afresh rather than copied.
+func TestContinueOperation(t *testing.T) {
 	st, ctx := openBotStore(t)
 	p := newPerson(t, st, 181)
 	u := userOf(t, st, ctx, p)
 	if _, err := st.CreateAccount(ctx, u.ID, "Cash", "KZT", 100_000_00); err != nil {
 		t.Fatal(err)
 	}
-	withCategories(t, st, ctx, u, storage.KindExpense, "Coffee")
+	if _, err := st.CreateAccount(ctx, u.ID, "Kaspi", "KZT", 100_000_00); err != nil {
+		t.Fatal(err)
+	}
+	withCategories(t, st, ctx, u, storage.KindExpense, "Coffee", "Transport")
 
 	p.say("➖ Expense")
+	p.tap("📌 Kaspi · KZT")
 	p.say("900")
 	p.tap("☕ Coffee")
 	p.say("Starbucks")
 	p.sees("Expense recorded")
+	if p.hasButton("🔁 Again") {
+		t.Error("the card still offers Again")
+	}
 
-	p.tap("🔁 Again")
-	p.sees("☕ Coffee · Starbucks") // the same again, only the amount is asked
+	p.tap("▶️ Continue")
+	p.sees("Kaspi") // the same account, without asking for it
 	p.say("1200")
+	p.sees("Category?") // the category is asked, not copied
+	p.tap("🚕 Transport")
+	p.say("Yandex")
 	p.sees("Expense recorded")
 
 	txs, _ := st.LastTransactions(ctx, u.ID, 2)
 	if len(txs) != 2 {
 		t.Fatalf("operations = %d, want 2", len(txs))
 	}
-	if txs[0].Amount != 1_200_00 || txs[0].CategoryName != "Coffee" || txs[0].Source != "Starbucks" {
-		t.Errorf("the repeat = %+v, want 1200 under Coffee from Starbucks", txs[0])
+	if txs[0].Amount != 1_200_00 || txs[0].CategoryName != "Transport" || txs[0].AccountName != "Kaspi" {
+		t.Errorf("the next one = %+v, want 1200 under Transport on Kaspi", txs[0])
 	}
 }
 

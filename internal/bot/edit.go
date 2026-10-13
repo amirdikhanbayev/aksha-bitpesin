@@ -212,37 +212,22 @@ func (b *Bot) moveToAccount(ctx context.Context, u storage.User, chatID int64, m
 	b.showTxInPlace(ctx, u, chatID, msgID, t.ID)
 }
 
-// repeatOperation starts a new operation from an old one: the same category,
-// account and source, so only the amount is left to type. The everyday case —
-// the same coffee, the same taxi — in two taps.
-func (b *Bot) repeatOperation(ctx context.Context, u storage.User, chatID int64, t storage.Transaction) {
+// continueOperation starts the next operation of the same kind on the same
+// account — a row of receipts entered one after another. Only the account is
+// carried over: the amount is typed and the category picked afresh, since the
+// next purchase is rarely in the same one.
+func (b *Bot) continueOperation(ctx context.Context, u storage.User, chatID int64, t storage.Transaction) {
 	acc, err := b.st.Account(ctx, u.ID, t.AccountID)
 	if err != nil {
 		b.fail(ctx, chatID, err)
 		return
 	}
-	d := draft{
-		Kind:       t.Kind,
-		AccountID:  acc.ID,
-		CategoryID: t.CategoryID,
-		Source:     t.Source,
+	if acc.Archived {
+		// The account is put away: let the user pick a live one instead.
+		b.startEntry(ctx, u, chatID, t.Kind)
+		return
 	}
-	b.setState(ctx, u.ID, stateAmount, d)
-
-	what := []string{}
-	if t.CategoryName != "" {
-		what = append(what, strings.TrimSpace(t.CategoryEmoji+" "+t.CategoryName))
-	}
-	if t.Source != "" {
-		what = append(what, t.Source)
-	}
-	again := "the same again"
-	if len(what) > 0 {
-		again = strings.Join(what, " · ")
-	}
-	b.send(ctx, chatID, fmt.Sprintf("%s · %s\n<i>%s</i>\n\nHow much this time? Send the amount in <b>%s</b>.",
-		kindTitle(t.Kind), fmt.Sprintf("%s %s", placeEmoji(acc.Name), esc(acc.Name)), esc(again), acc.Currency),
-		cancelKeyboard())
+	b.askAmount(ctx, u, chatID, draft{Kind: t.Kind}, acc)
 }
 
 // Category housekeeping: rename one, or put it away. Archiving keeps the

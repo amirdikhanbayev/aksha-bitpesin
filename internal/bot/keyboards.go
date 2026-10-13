@@ -193,7 +193,7 @@ func txCard(t storage.Transaction, balance *int64) (string, *models.InlineKeyboa
 				btn("🧑 Source", fmt.Sprintf("txsrc:%d", t.ID)),
 				btn("📝 Note", fmt.Sprintf("txnote:%d", t.ID)),
 			},
-			[]models.InlineKeyboardButton{btn("🔁 Again", fmt.Sprintf("txagain:%d", t.ID))},
+			[]models.InlineKeyboardButton{btn("▶️ Continue", fmt.Sprintf("txcont:%d", t.ID))},
 		)
 	}
 	rows = append(rows, []models.InlineKeyboardButton{btn("🗑 Delete", fmt.Sprintf("txdel:%d", t.ID))})

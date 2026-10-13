@@ -35,7 +35,7 @@ Tap <b>💱 Another currency</b> before the amount. The bot then asks <b>how muc
 <b>Got it wrong?</b>
 Every operation's card can change anything: <b>💰 Amount</b>, <b>📅 Date</b>, <b>🏷 Category</b>, <b>💳 Account</b>, <b>🧑 Source</b>, <b>📝 Note</b>, <b>🗑 Delete</b>. For something recorded earlier, open /last or 🔍 Search and tap it. Moving an operation to an account in another currency asks for the amount again — the old number wouldn't mean the same there.
 
-<b>🔁 Again</b> on a card repeats it: same category, account and source, only the amount to send.
+<b>▶️ Continue</b> on a card records the next one on the same account: send the amount, then pick its category.
 
 <b>Statements</b>
 📊 <b>Reports</b> — any period by tapping: a month, a window, or <b>📅 Custom range</b>. Under every statement: <b>🧾 Operations</b> for what's behind the numbers, <b>📄 CSV</b> for a file, and <b>🤖 Prompt for AI analysis</b> — the CSV plus a prompt explaining it, to paste into whatever AI you use.
