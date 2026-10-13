@@ -49,12 +49,7 @@ The monthly statement also arrives by itself on the 1st.
 Lent someone money, borrowed, bought something in installments, took a credit or a mortgage — add it under <b>🤝 Debts</b> and the bot keeps count of what's left. To pay: open it there and tap <b>💳 Make a payment</b> — or just record a usual <b>➖ Expense</b> and tap <b>🏦 It's a loan or debt payment</b> instead of a category (money paid back to you: <b>➕ Income</b> → <b>🤝 It's a debt paid back to me</b>). A bank loan also asks how much of the payment was interest. Lending and paying back aren't spending; installment and mortgage payments and any interest are, and the statement lists them by name. Set a payment day and you get a reminder that day if it isn't recorded.
 /debts
 
-<b>Accounts</b>
-💳 <b>🤝 Debts and loans</b>
-Lent someone money, borrowed, bought something in installments, took a credit or a mortgage — add it under <b>🤝 Debts</b> and the bot keeps count of what's left. To pay: open it there and tap <b>💳 Make a payment</b> — or just record a usual <b>➖ Expense</b> and tap <b>🏦 It's a loan or debt payment</b> instead of a category (money paid back to you: <b>➕ Income</b> → <b>🤝 It's a debt paid back to me</b>). A bank loan also asks how much of the payment was interest. Lending and paying back aren't spending; installment and mortgage payments and any interest are, and the statement lists them by name. Set a payment day and you get a reminder that day if it isn't recorded.
-/debts
-
-<b>Accounts</b> — balances; add, rename, archive. One place can hold several currencies: cash in tenge and cash in dollars live under the same <b>Cash</b>, each with its own balance.
+<b>💳 Accounts</b> — balances; add, rename, archive. <b>🧾 Operations</b> there lists each account's incomes and expenses, 15 to a page — tap a number to open one. One place can hold several currencies: cash in tenge and cash in dollars live under the same <b>Cash</b>, each with its own balance.
 
 <b>Rates</b>
 /rates — what's known · <b>🔄 Update from NBRK</b> · <b>🕰 Fill in past dates</b> for older operations

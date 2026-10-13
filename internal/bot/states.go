@@ -358,10 +358,19 @@ func parseRate(text string) (float64, error) {
 // touched — after recording or correcting something, that is the figure the
 // person actually wants to see.
 func (b *Bot) cardOf(ctx context.Context, u storage.User, t storage.Transaction) (string, *models.InlineKeyboardMarkup) {
+	return b.card(ctx, u, t, false)
+}
+
+// savedCardOf is the card shown right after an operation is recorded.
+func (b *Bot) savedCardOf(ctx context.Context, u storage.User, t storage.Transaction) (string, *models.InlineKeyboardMarkup) {
+	return b.card(ctx, u, t, true)
+}
+
+func (b *Bot) card(ctx context.Context, u storage.User, t storage.Transaction, fresh bool) (string, *models.InlineKeyboardMarkup) {
 	if balance, err := b.st.AccountBalance(ctx, u.ID, t.AccountID); err == nil {
-		return txCard(t, &balance)
+		return txCard(t, &balance, fresh)
 	}
-	return txCard(t, nil)
+	return txCard(t, nil, fresh)
 }
 
 // showTxInPlace redraws an operation's card in the message it already lives in —

@@ -345,8 +345,8 @@ func (b *Bot) cmdCategories(ctx context.Context, u storage.User, chatID int64) {
 	}
 	sb.WriteString("<i>Most-used first. Add one here, or when recording an operation.</i>")
 	rows = append(rows, []models.InlineKeyboardButton{
-		btn("➖ Expense", "newcatkind:expense"),
-		btn("➕ Income", "newcatkind:income"),
+		btn("➕ Expense category", "newcatkind:expense"),
+		btn("➕ Income category", "newcatkind:income"),
 	})
 	b.send(ctx, chatID, sb.String(), inline(rows...))
 }

@@ -364,7 +364,7 @@ func TestGuidedFlowFromScratch(t *testing.T) {
 	p.tap("📅 Date")
 	p.sees("When did it happen?")
 	p.tap("Yesterday")
-	p.sees("Expense recorded")
+	p.sees("🧾 Expense")
 	moved, _ := st.Transaction(ctx, u.ID, last[0].ID)
 	loc, _ := time.LoadLocation("Asia/Almaty")
 	want := time.Now().In(loc).AddDate(0, 0, -1).Format("2006-01-02")
@@ -682,7 +682,7 @@ func TestCategoryFromSuggestions(t *testing.T) {
 	p.say("⚙️ Settings")
 	p.tap("🏷 Categories")
 	p.sees("none yet — they appear as you name them")
-	p.tap("➕ Expense")
+	p.tap("➕ Expense category")
 	p.sees("expense category")
 	p.say("☕ Coffee")
 	p.sees("Category “☕ Coffee” created")
@@ -1368,7 +1368,7 @@ func TestCorrectAmountOfAConvertedOperation(t *testing.T) {
 
 	p.say("/last")
 	p.tapFirstOperation() // the list opens the card, so older operations are reachable too
-	p.sees("Expense recorded")
+	p.sees("🧾 Expense")
 	p.tap("💰 Amount")
 	p.sees("Currently 5,000 KZT") // the figure that was typed, not the debit
 	p.sees("recompute what left") // and it says what follows from it
@@ -1523,7 +1523,7 @@ func TestOlderOperationIsReachableFromTheList(t *testing.T) {
 	p.say("/last")
 	p.sees("Tap one to correct")
 	p.tapFirstOperation()
-	p.sees("Expense recorded")
+	p.sees("🧾 Expense")
 	p.sees("9,000 KZT")
 
 	p.tap("💰 Amount")
@@ -1870,7 +1870,10 @@ func TestSearch(t *testing.T) {
 	// And the results open their cards.
 	p.say("/search magnum")
 	p.tapFirstOperation()
-	p.sees("Expense recorded")
+	p.sees("🧾 Expense")
+	if strings.Contains(plain(p.tg.visible()[0].text), "recorded") {
+		t.Error("an operation opened from search is announced as just recorded")
+	}
 }
 
 func TestParseSearch(t *testing.T) {
@@ -2247,7 +2250,7 @@ func TestAddingSeveralCategoriesInARow(t *testing.T) {
 	}
 
 	p.say("/categories")
-	p.tap("➕ Expense")
+	p.tap("➕ Expense category")
 	p.say("🛒 Groceries")
 	p.sees("Send the next name to add another")
 	p.say("🚕 Transport")

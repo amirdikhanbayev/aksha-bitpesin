@@ -232,7 +232,7 @@ func (b *Bot) saveEntry(ctx context.Context, u storage.User, chatID int64, d dra
 	}
 	b.clearState(ctx, u.ID)
 
-	text, kb := b.cardOf(ctx, u, saved)
+	text, kb := b.savedCardOf(ctx, u, saved)
 	if warn := b.budgetWarning(ctx, u, saved); warn != "" {
 		text += "\n\n" + warn
 	}
