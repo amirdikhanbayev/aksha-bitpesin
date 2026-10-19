@@ -31,7 +31,8 @@ func AIPrompt(u storage.User, p parser.Period, ops int) string {
 
 	b.WriteString("Columns:\n")
 	b.WriteString("- `Date` — when it happened (dd.mm.yyyy hh:mm)\n")
-	b.WriteString("- `Type` — income, expense, transfer, debt in or debt out\n")
+	b.WriteString("- `Type` — income, expense, transfer, debt in, debt out, transfer fee or\n" +
+		"  debt forgiven\n")
 	b.WriteString("- `Account amount` / `Account currency` — what moved on the account\n")
 	b.WriteString("- `Operation amount` / `Operation currency` / `Rate` — filled in only when the\n" +
 		"  operation happened in a different currency from the account, e.g. a purchase\n" +
@@ -51,6 +52,11 @@ func AIPrompt(u storage.User, p parser.Period, ops int) string {
 	b.WriteString("- **Debt in / debt out are not income or expense either.** They are money lent,\n" +
 		"  paid back, borrowed or repaid. Installment and mortgage payments, and loan\n" +
 		"  interest, *are* expenses: the purchase they pay for was never recorded as one\n")
+	b.WriteString("- **A transfer fee is an expense**: what the bank charged for a transfer, on top\n" +
+		"  of the transfer itself\n")
+	b.WriteString("- **Debt forgiven moved no money.** A positive amount on a debt I lent is money\n" +
+		"  I let go — count it as spending; on a debt I owed, it was let go to me — count\n" +
+		"  it as income. Don't apply either to an account balance\n")
 	b.WriteString("- **Keep currencies apart.** Don't add tenge to dollars. Report each currency on\n" +
 		"  its own; convert only if you say which rate you used and that it's an estimate\n")
 	b.WriteString("- **An empty category means I didn't label it**, not that it's uncategorised\n" +

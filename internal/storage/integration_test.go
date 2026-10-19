@@ -86,7 +86,7 @@ func TestEndToEnd(t *testing.T) {
 	// A transfer with exchange: 54,000 KZT → 100 USD at the user's rate of 540
 	toAmount := int64(100_00)
 	rate := 1.0 / 540.0
-	if _, err := st.CreateTransfer(ctx, u.ID, kaspi.ID, usd.ID, 54_000_00, &toAmount, &rate, "exchange", at); err != nil {
+	if _, err := st.CreateTransfer(ctx, u.ID, kaspi.ID, usd.ID, 54_000_00, &toAmount, &rate, "exchange", at, 0, ""); err != nil {
 		t.Fatalf("transfer: %v", err)
 	}
 

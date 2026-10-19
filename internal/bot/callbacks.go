@@ -35,7 +35,7 @@ func (b *Bot) handleCallback(ctx context.Context, u storage.User, q *models.Call
 		return
 	}
 
-	if b.handleLoanCallback(ctx, u, q, action, arg, d) {
+	if b.handleLoanCallback(ctx, u, q, action, arg, d) || b.handleSplitCallback(ctx, u, q, action, arg, d) {
 		return
 	}
 
@@ -307,12 +307,17 @@ func (b *Bot) handleCallback(ctx context.Context, u storage.User, q *models.Call
 			b.answer(ctx, q, "Didn't get that")
 			return
 		}
+		shares, _ := b.st.SplitLoans(ctx, u.ID, id)
 		if err := b.st.DeleteTransaction(ctx, u.ID, id); err != nil {
 			b.answer(ctx, q, "Already deleted")
 			return
 		}
 		b.answer(ctx, q, "Deleted")
-		b.edit(ctx, chatID, msgID, "🗑 Operation deleted", nil)
+		text := "🗑 Operation deleted"
+		if len(shares) > 0 {
+			text += fmt.Sprintf(", with the %d %s it was split into", len(shares), plural(len(shares), "debt"))
+		}
+		b.edit(ctx, chatID, msgID, text, nil)
 
 	case "txsrc":
 		id, err := parseID(arg)
@@ -691,6 +696,38 @@ func (b *Bot) handleCallback(ctx context.Context, u storage.User, q *models.Call
 		b.edit(ctx, chatID, msgID, "Entering the credited amount…", nil)
 		b.askTransferAmountManual(ctx, u, chatID, d)
 
+	case "trfee":
+		b.answer(ctx, q, "")
+		switch arg {
+		case feePercent, feeFixed:
+			b.edit(ctx, chatID, msgID, "Fee: "+map[string]string{feePercent: "in percent", feeFixed: "a fixed amount"}[arg], nil)
+			b.askTransferFeeInput(ctx, u, chatID, d, arg)
+		default:
+			if d.TxID != 0 {
+				return
+			}
+			b.edit(ctx, chatID, msgID, "Fee: <i>none</i>", nil)
+			b.saveTransfer(ctx, u, chatID, d, 0, "")
+		}
+
+	case "txfee": // from a transfer's card: open its fee, or add one
+		id, err := parseID(arg)
+		if err != nil {
+			b.answer(ctx, q, "Unknown choice")
+			return
+		}
+		t, err := b.st.Transaction(ctx, u.ID, id)
+		if err != nil || t.Kind != storage.KindTransfer {
+			b.answer(ctx, q, "Operation not found")
+			return
+		}
+		b.answer(ctx, q, "")
+		if fee, err := b.st.TransferFee(ctx, u.ID, id); err == nil {
+			b.showTxInPlace(ctx, u, chatID, msgID, fee.ID)
+			return
+		}
+		b.askTransferFee(ctx, u, chatID, draft{TxID: t.ID, AccountID: t.AccountID, Amount: t.Amount})
+
 	// --- settings ---
 	case "setmenu":
 		b.answer(ctx, q, "")
@@ -884,6 +921,7 @@ var wizardSteps = map[string][]string{
 	"trto":     {stateTransferAmt},
 	"trdir":    {stateTransferRate},
 	"tramount": {stateTransferRate},
+	"trfee":    {stateTransferFee},
 	"recacc":   {stateRecurAmount},
 	"reccat":   {stateRecurAmount},
 	"recday":   {stateRecurDay},
@@ -898,6 +936,11 @@ var wizardSteps = map[string][]string{
 	"loanint":     {stateLoanInterest},
 	"entloan":     {stateAmount, stateNewCategory},
 	"entloanpick": {stateAmount, stateNewCategory},
+	"loanforg":    {stateLoanForgive},
+
+	"splitwho":  {stateSplitPeople},
+	"splithow":  {stateSplitPeople},
+	"splitrest": {stateSplitShare},
 }
 
 func slogError(msg string, err error) {

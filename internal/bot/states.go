@@ -94,6 +94,14 @@ func (b *Bot) handleStateInput(ctx context.Context, u storage.User, chatID int64
 		b.inputLoanInterest(ctx, u, chatID, d, text)
 	case stateLoanFix:
 		b.inputLoanFix(ctx, u, chatID, d, text)
+	case stateLoanForgive:
+		b.inputLoanForgive(ctx, u, chatID, d, text)
+	case stateTransferFee:
+		b.inputTransferFee(ctx, u, chatID, d, text)
+	case stateSplitPeople:
+		b.inputSplitPerson(ctx, u, chatID, d, text)
+	case stateSplitShare:
+		b.inputSplitShare(ctx, u, chatID, d, text)
 	case stateLoanAccount, stateLoanCurrency, stateLoanPayAcc:
 		b.send(ctx, chatID, "Pick one with the buttons above.", nil)
 	default:
@@ -357,6 +365,8 @@ func parseRate(text string) (float64, error) {
 // cardOf renders an operation's card together with the balance of the account it
 // touched — after recording or correcting something, that is the figure the
 // person actually wants to see.
+//
+// A split bill's card also lists the shares it was split into.
 func (b *Bot) cardOf(ctx context.Context, u storage.User, t storage.Transaction) (string, *models.InlineKeyboardMarkup) {
 	return b.card(ctx, u, t, false)
 }
@@ -367,10 +377,14 @@ func (b *Bot) savedCardOf(ctx context.Context, u storage.User, t storage.Transac
 }
 
 func (b *Bot) card(ctx context.Context, u storage.User, t storage.Transaction, fresh bool) (string, *models.InlineKeyboardMarkup) {
-	if balance, err := b.st.AccountBalance(ctx, u.ID, t.AccountID); err == nil {
-		return txCard(t, &balance, fresh)
+	var shares []storage.Loan
+	if splittable(t) {
+		shares, _ = b.st.SplitLoans(ctx, u.ID, t.ID)
 	}
-	return txCard(t, nil, fresh)
+	if balance, err := b.st.AccountBalance(ctx, u.ID, t.AccountID); err == nil {
+		return txCard(t, &balance, fresh, shares)
+	}
+	return txCard(t, nil, fresh, shares)
 }
 
 // showTxInPlace redraws an operation's card in the message it already lives in —

@@ -3,6 +3,8 @@ package bot
 import (
 	"context"
 	"fmt"
+	"math"
+	"strings"
 
 	"github.com/go-telegram/bot/models"
 
@@ -80,7 +82,7 @@ func (b *Bot) askTransferRate(ctx context.Context, u storage.User, chatID int64,
 		return
 	}
 	if from.Currency == to.Currency {
-		b.saveTransfer(ctx, u, chatID, d)
+		b.askTransferFee(ctx, u, chatID, d)
 		return
 	}
 	b.setState(ctx, u.ID, stateTransferRate, d)
@@ -169,7 +171,7 @@ func (b *Bot) inputTransferRate(ctx context.Context, u storage.User, chatID int6
 	b.send(ctx, chatID, fmt.Sprintf("Crediting <b>%s</b>\n<i>your rate: %s</i>",
 		money.FormatCode(toAmount, to.Decimals, to.Currency),
 		rateLine(from.Currency, to.Currency, rate)), nil)
-	b.saveTransfer(ctx, u, chatID, d)
+	b.askTransferFee(ctx, u, chatID, d)
 }
 
 // inputTransferToAmount: the user enters the credited amount directly, we derive the rate.
@@ -195,16 +197,119 @@ func (b *Bot) inputTransferToAmount(ctx context.Context, u storage.User, chatID 
 	d.Rate = &rate
 	b.send(ctx, chatID, fmt.Sprintf("<i>Your rate from these amounts: %s</i>",
 		rateLine(from.Currency, to.Currency, rate)), nil)
-	b.saveTransfer(ctx, u, chatID, d)
+	b.askTransferFee(ctx, u, chatID, d)
 }
 
-func (b *Bot) saveTransfer(ctx context.Context, u storage.User, chatID int64, d draft) {
+// --- the fee ---
+
+// Fee modes: how the user states the fee.
+const (
+	feePercent = "pct" // a percent of the amount debited
+	feeFixed   = "fix" // an amount in the source account's currency
+)
+
+// askTransferFee is the last step of a transfer: whether the bank charged for
+// it. The fee comes out of the source account on top of the amount debited, and
+// unlike the transfer itself it is spending. With d.TxID set it is asked for a
+// transfer already recorded, from its card.
+func (b *Bot) askTransferFee(ctx context.Context, u storage.User, chatID int64, d draft) {
+	from, err := b.st.Account(ctx, u.ID, d.AccountID)
+	if err != nil {
+		b.fail(ctx, chatID, err)
+		return
+	}
+	d.FeeMode = ""
+	b.setState(ctx, u.ID, stateTransferFee, d)
+	rows := [][]models.InlineKeyboardButton{}
+	if d.TxID == 0 {
+		rows = append(rows, []models.InlineKeyboardButton{btn("✅ No fee", "trfee:none")})
+	}
+	rows = append(rows,
+		[]models.InlineKeyboardButton{btn("％ In percent", "trfee:"+feePercent), btn("💵 Fixed amount", "trfee:"+feeFixed)},
+		[]models.InlineKeyboardButton{btn("✖️ Cancel", "cancel")})
+	b.send(ctx, chatID, fmt.Sprintf(
+		"Debiting <b>%s</b>. Was there a fee for the transfer?\n"+
+			"<i>It is taken from “%s” on top, and counted as spending.</i>",
+		money.FormatCode(d.Amount, from.Decimals, from.Currency), esc(from.Name)), inline(rows...))
+}
+
+// askTransferFeeInput — the way of stating the fee is chosen; now the number.
+func (b *Bot) askTransferFeeInput(ctx context.Context, u storage.User, chatID int64, d draft, mode string) {
+	from, err := b.st.Account(ctx, u.ID, d.AccountID)
+	if err != nil {
+		b.fail(ctx, chatID, err)
+		return
+	}
+	d.FeeMode = mode
+	b.setState(ctx, u.ID, stateTransferFee, d)
+	if mode == feePercent {
+		b.send(ctx, chatID, fmt.Sprintf("What percent of %s? For example: <code>1.5</code>",
+			money.FormatCode(d.Amount, from.Decimals, from.Currency)), cancelKeyboard())
+		return
+	}
+	b.send(ctx, chatID, fmt.Sprintf("How much was the fee, in <b>%s</b>?", from.Currency), cancelKeyboard())
+}
+
+// inputTransferFee takes the fee as typed: a percent, or an amount. Without a
+// mode chosen, "1.5%" is a percent and a bare number an amount.
+func (b *Bot) inputTransferFee(ctx context.Context, u storage.User, chatID int64, d draft, text string) {
+	if isSkip(text) && d.TxID == 0 {
+		b.saveTransfer(ctx, u, chatID, d, 0, "")
+		return
+	}
+	from, err := b.st.Account(ctx, u.ID, d.AccountID)
+	if err != nil {
+		b.fail(ctx, chatID, err)
+		return
+	}
+	t := strings.TrimSpace(text)
+	mode := d.FeeMode
+	if strings.HasSuffix(t, "%") {
+		mode, t = feePercent, strings.TrimSpace(strings.TrimSuffix(t, "%"))
+	}
+	var fee int64
+	note := ""
+	switch mode {
+	case feePercent:
+		pct, err := parseRate(t)
+		if err != nil || pct >= 100 {
+			b.send(ctx, chatID, "Send the percent as a number below 100, for example <code>1.5</code>", cancelKeyboard())
+			return
+		}
+		fee = int64(math.Round(float64(d.Amount) * pct / 100))
+		if fee <= 0 {
+			b.send(ctx, chatID, "That percent comes to less than the smallest coin. Check the number.", cancelKeyboard())
+			return
+		}
+		note = trimFloat(pct) + "%"
+	default:
+		fee, err = money.Parse(t, from.Decimals)
+		if err != nil || fee <= 0 {
+			b.send(ctx, chatID, fmt.Sprintf(
+				"Send the fee in <b>%s</b> as a number, for example <code>500</code> — or <code>1.5%%</code> for a percent.",
+				from.Currency), cancelKeyboard())
+			return
+		}
+	}
+	if d.TxID != 0 {
+		if _, err := b.st.AddTransferFee(ctx, u.ID, d.TxID, fee, note); err != nil {
+			b.fail(ctx, chatID, err)
+			return
+		}
+		b.clearState(ctx, u.ID)
+		b.showTx(ctx, u, chatID, d.TxID)
+		return
+	}
+	b.saveTransfer(ctx, u, chatID, d, fee, note)
+}
+
+func (b *Bot) saveTransfer(ctx context.Context, u storage.User, chatID int64, d draft, fee int64, feeNote string) {
 	at := b.clock().In(u.Location())
 	if d.OccurredAt != nil {
 		at = *d.OccurredAt
 	}
 	t, err := b.st.CreateTransfer(ctx, u.ID, d.AccountID, d.ToAccountID, d.Amount,
-		d.ToAmount, d.Rate, d.Note, at)
+		d.ToAmount, d.Rate, d.Note, at, fee, feeNote)
 	if err != nil {
 		b.fail(ctx, chatID, err)
 		return

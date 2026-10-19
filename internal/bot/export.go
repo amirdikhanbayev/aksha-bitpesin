@@ -49,6 +49,12 @@ func (b *Bot) cmdExport(ctx context.Context, u storage.User, chatID int64, args 
 			storage.KindDebtIn:   "debt in",
 			storage.KindDebtOut:  "debt out",
 		}[t.Kind]
+		switch {
+		case t.Forgiven:
+			kind = "debt forgiven"
+		case t.FeeOf != nil:
+			kind = "transfer fee"
+		}
 		loan, interest := "", ""
 		if t.LoanID != nil {
 			loan = t.LoanName + " (" + loanKindTitle(t.LoanKind) + ")"

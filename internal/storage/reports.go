@@ -79,20 +79,26 @@ func (s *Store) Totals(ctx context.Context, userID int64, from, to time.Time) ([
 // ByCategory — breakdown by category over a period. kind: 'income' | 'expense'.
 func (s *Store) ByCategory(ctx context.Context, userID int64, kind string, from, to time.Time) ([]CategorySum, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT t.category_id, COALESCE(c.name, l.name, 'No category'),
+		SELECT t.category_id,
+		       COALESCE(c.name, l.name, CASE WHEN t.fee_of IS NOT NULL THEN 'Transfer fees' END, 'No category'),
 		       COALESCE(c.emoji, CASE l.kind WHEN 'installment' THEN '🛍'
 		                                     WHEN 'mortgage'    THEN '🏠'
-		                                     WHEN 'credit'      THEN '🏦' END, ''),
+		                                     WHEN 'credit'      THEN '🏦'
+		                                     WHEN 'lent'        THEN '🤝'
+		                                     WHEN 'borrowed'    THEN '🙏' END,
+		                CASE WHEN t.fee_of IS NOT NULL THEN '💸' END, ''),
 		       t.kind, a.currency, cur.decimals, SUM(t.amount), COUNT(*)
 		FROM transactions t
 		JOIN accounts a ON a.id = t.account_id
 		JOIN currencies cur ON cur.code = a.currency
 		LEFT JOIN categories c ON c.id = t.category_id
 		-- A loan payment has no category of its own: it is listed under the loan.
+		-- So is a forgiven debt, and a transfer's fee is listed as one.
 		LEFT JOIN loans l ON l.id = t.loan_id AND t.category_id IS NULL
 		WHERE t.user_id = $1 AND t.deleted_at IS NULL AND t.kind = $2
 		  AND t.occurred_at >= $3 AND t.occurred_at < $4
-		GROUP BY t.category_id, c.name, c.emoji, l.id, l.name, l.kind, t.kind, a.currency, cur.decimals
+		GROUP BY t.category_id, c.name, c.emoji, l.id, l.name, l.kind, (t.fee_of IS NOT NULL),
+		         t.kind, a.currency, cur.decimals
 		ORDER BY a.currency, SUM(t.amount) DESC`, userID, kind, from, to)
 	if err != nil {
 		return nil, err
@@ -113,13 +119,13 @@ func (s *Store) ByCategory(ctx context.Context, userID int64, kind string, from,
 // BySource — breakdown by income source / expense recipient.
 func (s *Store) BySource(ctx context.Context, userID int64, kind string, from, to time.Time) ([]SourceSum, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT COALESCE(t.source, 'Not specified'), t.kind, a.currency, cur.decimals, SUM(t.amount), COUNT(*)
+		SELECT COALESCE(t.source, CASE WHEN t.fee_of IS NOT NULL THEN 'Transfer fees' END, 'Not specified'), t.kind, a.currency, cur.decimals, SUM(t.amount), COUNT(*)
 		FROM transactions t
 		JOIN accounts a ON a.id = t.account_id
 		JOIN currencies cur ON cur.code = a.currency
 		WHERE t.user_id = $1 AND t.deleted_at IS NULL AND t.kind = $2
 		  AND t.occurred_at >= $3 AND t.occurred_at < $4
-		GROUP BY COALESCE(t.source, 'Not specified'), t.kind, a.currency, cur.decimals
+		GROUP BY COALESCE(t.source, CASE WHEN t.fee_of IS NOT NULL THEN 'Transfer fees' END, 'Not specified'), t.kind, a.currency, cur.decimals
 		ORDER BY a.currency, SUM(t.amount) DESC`, userID, kind, from, to)
 	if err != nil {
 		return nil, err
@@ -136,7 +142,8 @@ func (s *Store) BySource(ctx context.Context, userID int64, kind string, from, t
 	return out, rows.Err()
 }
 
-// ByAccount — account turnover over a period.
+// ByAccount — account turnover over a period. A forgiven debt is spending or
+// income, but no money went through the account, so it is not turnover.
 func (s *Store) ByAccount(ctx context.Context, userID int64, from, to time.Time) ([]AccountSum, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT a.id, a.name, a.currency, cur.decimals,
@@ -146,6 +153,7 @@ func (s *Store) ByAccount(ctx context.Context, userID int64, from, to time.Time)
 		JOIN accounts a ON a.id = t.account_id
 		JOIN currencies cur ON cur.code = a.currency
 		WHERE t.user_id = $1 AND t.deleted_at IS NULL AND t.kind IN ('income','expense')
+		  AND NOT t.forgiven
 		  AND t.occurred_at >= $2 AND t.occurred_at < $3
 		GROUP BY a.id, a.name, a.currency, cur.decimals
 		ORDER BY a.name`, userID, from, to)
