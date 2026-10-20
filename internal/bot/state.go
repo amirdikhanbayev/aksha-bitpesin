@@ -42,6 +42,10 @@ const (
 	stateLoanPay      = "loan:pay"      // a payment: how much
 	stateLoanInterest = "loan:interest" // a payment: how much of it was interest
 	stateLoanFix      = "loan:fix"      // what is really owed, to correct the count
+	stateLoanForgive  = "loan:forgive"  // how much of a debt is let go
+	stateTransferFee  = "tr:fee"        // the fee of a transfer: a percent or an amount
+	stateSplitPeople  = "split:who"     // splitting a bill: who shares it (buttons, or a typed name)
+	stateSplitShare   = "split:share"   // splitting a bill: one person's share
 )
 
 // draft — the operation draft the wizard assembles.
@@ -86,6 +90,13 @@ type draft struct {
 	LoanKind string `json:"loan_kind,omitempty"`
 	LoanName string `json:"loan_name,omitempty"`
 	Monthly  *int64 `json:"monthly,omitempty"`
+
+	// A transfer's fee: how the user is stating it (feePercent / feeFixed).
+	FeeMode string `json:"fee_mode,omitempty"`
+
+	// Splitting a bill (TxID): the people picked, in Queue, and the shares
+	// typed so far, in the same order.
+	Shares []int64 `json:"shares,omitempty"`
 }
 
 func (b *Bot) setState(ctx context.Context, userID int64, state string, d draft) {

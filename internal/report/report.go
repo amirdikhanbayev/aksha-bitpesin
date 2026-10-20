@@ -216,12 +216,18 @@ func writeLoans(ctx context.Context, b *strings.Builder, st *storage.Store, u st
 			if x.In > 0 {
 				parts = append(parts, "got back "+f(x.In))
 			}
+			if x.Forgiven > 0 {
+				parts = append(parts, "forgave "+f(x.Forgiven))
+			}
 		case storage.LoanBorrowed:
 			if x.In > 0 {
 				parts = append(parts, "borrowed "+f(x.In))
 			}
 			if x.Out > 0 {
 				parts = append(parts, "paid back "+f(x.Out))
+			}
+			if x.Forgiven > 0 {
+				parts = append(parts, "forgiven to you "+f(x.Forgiven))
 			}
 		default:
 			if x.In > 0 {

@@ -424,9 +424,12 @@ func (b *Bot) loanView(ctx context.Context, u storage.User, l storage.Loan) (str
 	case storage.LoanBorrowed:
 		paidWord = "Paid back"
 	}
-	if l.PaidOff() {
+	switch {
+	case l.PaidOff() && l.Forgiven > 0:
+		sb.WriteString("✅ <b>Settled</b>\n")
+	case l.PaidOff():
 		sb.WriteString("✅ <b>Paid off</b>\n")
-	} else {
+	default:
 		fmt.Fprintf(&sb, "%s: <b>%s</b> of %s\n", owed,
 			money.FormatCode(l.Outstanding(), l.Decimals, l.Currency), money.Format(l.Principal, l.Decimals))
 		pct := int(l.Repaid * 100 / l.Principal)
@@ -438,6 +441,13 @@ func (b *Bot) loanView(ctx context.Context, u storage.User, l storage.Loan) (str
 			fmt.Fprintf(&sb, " · of it interest %s", money.Format(l.InterestPaid, l.Decimals))
 		}
 		sb.WriteByte('\n')
+	}
+	if l.Forgiven > 0 {
+		word := "Forgiven"
+		if !l.OwedToMe() {
+			word = "Forgiven to you"
+		}
+		fmt.Fprintf(&sb, "🕊 %s: %s\n", word, money.FormatCode(l.Forgiven, l.Decimals, l.Currency))
 	}
 	if l.MonthlyPayment != nil && !l.PaidOff() {
 		fmt.Fprintf(&sb, "Payment: %s", money.FormatCode(*l.MonthlyPayment, l.Decimals, l.Currency))
@@ -474,7 +484,20 @@ func (b *Bot) loanView(ctx context.Context, u storage.User, l storage.Loan) (str
 		case storage.LoanBorrowed:
 			pay = "💸 Pay back"
 		}
-		rows = append(rows, []models.InlineKeyboardButton{btn(pay, fmt.Sprintf("loanpay:%d", l.ID))})
+		row := []models.InlineKeyboardButton{btn(pay, fmt.Sprintf("loanpay:%d", l.ID))}
+		if l.Forgivable() {
+			forgive := "🕊 Forgive"
+			if !l.OwedToMe() {
+				forgive = "🕊 I was let off"
+			}
+			row = append(row, btn(forgive, fmt.Sprintf("loanforgive:%d", l.ID)))
+		}
+		rows = append(rows, row)
+	}
+	if l.SplitOf != nil {
+		if _, err := b.st.Transaction(ctx, u.ID, *l.SplitOf); err == nil {
+			rows = append(rows, []models.InlineKeyboardButton{btn("🧾 The bill", fmt.Sprintf("txshow:%d", *l.SplitOf))})
+		}
 	}
 	rows = append(rows,
 		[]models.InlineKeyboardButton{
@@ -725,6 +748,77 @@ func (b *Bot) payFromEntry(ctx context.Context, u storage.User, chatID int64, ms
 	b.loanPayAmount(ctx, u, chatID, draft{LoanID: l.ID, AccountID: d.AccountID, Currency: l.Currency}, l, d.Amount)
 }
 
+// --- forgiving ---
+
+// askLoanForgive asks how much of a debt between people is let go. Nothing moves
+// on any account; the part forgiven is spending when the money was lent, and
+// income when the user was the one let off.
+func (b *Bot) askLoanForgive(ctx context.Context, u storage.User, chatID int64, id int64) {
+	l, err := b.st.Loan(ctx, u.ID, id)
+	if err != nil {
+		b.fail(ctx, chatID, err)
+		return
+	}
+	if !l.Forgivable() || l.PaidOff() {
+		b.send(ctx, chatID, "There is nothing to forgive on it.", nil)
+		return
+	}
+	b.setState(ctx, u.ID, stateLoanForgive, draft{LoanID: l.ID, Currency: l.Currency})
+	owed := money.FormatCode(l.Outstanding(), l.Decimals, l.Currency)
+	var text string
+	if l.OwedToMe() {
+		counted := "spending"
+		if l.SplitOf != nil {
+			if bill, err := b.st.Transaction(ctx, u.ID, *l.SplitOf); err == nil && bill.CategoryName != "" {
+				counted += " under " + esc(categoryLabel(bill))
+			}
+		}
+		text = fmt.Sprintf("🕊 <b>%s</b> owes you <b>%s</b>. How much do you forgive?\n"+
+			"<i>No money moves. It's counted as %s — it isn't coming back.</i>", esc(l.Name), owed, counted)
+	} else {
+		text = fmt.Sprintf("🕊 You owe <b>%s</b> to <b>%s</b>. How much were you let off?\n"+
+			"<i>No money moves. It's counted as income — money you keep.</i>", owed, esc(l.Name))
+	}
+	b.send(ctx, chatID, text, inline(
+		[]models.InlineKeyboardButton{btn("All: "+money.Format(l.Outstanding(), l.Decimals), "loanforg:all")},
+		[]models.InlineKeyboardButton{btn("✖️ Cancel", "cancel")}))
+}
+
+func (b *Bot) inputLoanForgive(ctx context.Context, u storage.User, chatID int64, d draft, text string) {
+	l, err := b.st.Loan(ctx, u.ID, d.LoanID)
+	if err != nil {
+		b.clearState(ctx, u.ID)
+		b.fail(ctx, chatID, err)
+		return
+	}
+	amount, err := money.Parse(text, l.Decimals)
+	if err != nil || amount <= 0 || amount > l.Outstanding() {
+		b.send(ctx, chatID, fmt.Sprintf("Send the amount as a number, no more than the %s owed.",
+			money.FormatCode(l.Outstanding(), l.Decimals, l.Currency)), cancelKeyboard())
+		return
+	}
+	b.forgiveLoan(ctx, u, chatID, l, amount)
+}
+
+func (b *Bot) forgiveLoan(ctx context.Context, u storage.User, chatID int64, l storage.Loan, amount int64) {
+	if _, err := b.st.ForgiveLoan(ctx, u.ID, l.ID, amount, b.clock().In(u.Location())); err != nil {
+		b.fail(ctx, chatID, err)
+		return
+	}
+	b.clearState(ctx, u.ID)
+	l, err := b.st.Loan(ctx, u.ID, l.ID)
+	if err != nil {
+		b.fail(ctx, chatID, err)
+		return
+	}
+	head := "🕊 <b>Forgiven: " + money.FormatCode(amount, l.Decimals, l.Currency) + "</b>"
+	if !l.OwedToMe() {
+		head = "🕊 <b>Let off: " + money.FormatCode(amount, l.Decimals, l.Currency) + "</b>"
+	}
+	text, kb := b.loanView(ctx, u, l)
+	b.send(ctx, chatID, head+"\n\n"+text, kb)
+}
+
 // --- history, correction, deletion ---
 
 func (b *Bot) showLoanHistory(ctx context.Context, u storage.User, chatID int64, id int64) {
@@ -794,7 +888,10 @@ func (b *Bot) askLoanDelete(ctx context.Context, u storage.User, chatID int64, m
 	}
 	txs, _ := b.st.LoanTransactions(ctx, u.ID, id, 1000)
 	text := fmt.Sprintf("Delete <b>%s</b>?", esc(loanTitle(l)))
-	if len(txs) > 0 {
+	switch {
+	case l.SplitOf != nil:
+		text += "\nIt's a share of a split bill: the share goes back into the bill as your own spending."
+	case len(txs) > 0:
 		text += fmt.Sprintf("\nIts %d %s go with it, and the balances go back as if it was never recorded.",
 			len(txs), plural(len(txs), "operation"))
 	}
@@ -993,6 +1090,22 @@ func (b *Bot) handleLoanCallback(ctx context.Context, u storage.User, q *models.
 		}
 		b.answer(ctx, q, "")
 		b.askLoanFix(ctx, u, chatID, id)
+	case "loanforgive":
+		if idErr != nil {
+			b.answer(ctx, q, "Unknown choice")
+			return true
+		}
+		b.answer(ctx, q, "")
+		b.askLoanForgive(ctx, u, chatID, id)
+	case "loanforg":
+		l, err := b.st.Loan(ctx, u.ID, d.LoanID)
+		if err != nil || l.Outstanding() <= 0 {
+			b.answer(ctx, q, "Nothing is owed")
+			return true
+		}
+		b.answer(ctx, q, "")
+		b.edit(ctx, chatID, msgID, "Forgiving: <b>"+money.FormatCode(l.Outstanding(), l.Decimals, l.Currency)+"</b>", nil)
+		b.forgiveLoan(ctx, u, chatID, l, l.Outstanding())
 	case "loandel":
 		if idErr != nil {
 			b.answer(ctx, q, "Unknown choice")

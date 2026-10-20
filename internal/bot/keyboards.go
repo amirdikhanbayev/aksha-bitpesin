@@ -2,6 +2,7 @@ package bot
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -108,18 +109,21 @@ func sourcesKeyboard(sources []string, prefix string) *models.InlineKeyboardMark
 // txCard — the card for a saved operation, with the buttons that correct it.
 // balance is the account's balance after the operation, or nil when unknown.
 // fresh marks the card shown right after recording; an operation opened later
-// from a list isn't announced as just recorded.
-func txCard(t storage.Transaction, balance *int64, fresh bool) (string, *models.InlineKeyboardMarkup) {
+// from a list isn't announced as just recorded. shares are the debts a split
+// bill was divided into.
+func txCard(t storage.Transaction, balance *int64, fresh bool, shares []storage.Loan) (string, *models.InlineKeyboardMarkup) {
 	if t.LoanID != nil {
 		return loanTxCard(t, balance)
 	}
 	var b strings.Builder
 
 	what := "Transfer"
-	switch t.Kind {
-	case storage.KindIncome:
+	switch {
+	case t.Kind == storage.KindIncome:
 		what = "Income"
-	case storage.KindExpense:
+	case t.FeeOf != nil:
+		what = "Transfer fee"
+	case t.Kind == storage.KindExpense:
 		what = "Expense"
 	}
 	if fresh {
@@ -141,13 +145,24 @@ func txCard(t storage.Transaction, balance *int64, fresh bool) (string, *models.
 		if t.Rate != nil {
 			fmt.Fprintf(&b, "Rate: %s\n", rateLine(t.AccountCurr, t.ToAccountCurr, *t.Rate))
 		}
+		if t.Fee > 0 {
+			fmt.Fprintf(&b, "Fee: %s · %s%%\nDebited in all: <b>%s</b>\n",
+				money.FormatCode(t.Fee, t.Decimals, t.AccountCurr),
+				trimFloat(math.Round(float64(t.Fee)*10000/float64(t.Amount))/100),
+				money.FormatCode(t.Amount+t.Fee, t.Decimals, t.AccountCurr))
+		}
 	} else {
 		mark, sign := "💸", "−"
 		if t.Kind == storage.KindIncome {
 			mark, sign = "💰", "+"
 		}
-		fmt.Fprintf(&b, "%s <b>%s%s</b>\n", mark, sign,
+		fmt.Fprintf(&b, "%s <b>%s%s</b>", mark, sign,
 			money.FormatCode(t.Amount, t.Decimals, t.AccountCurr))
+		if len(shares) > 0 {
+			b.WriteString(" · your share")
+		}
+		b.WriteByte('\n')
+		writeShares(&b, t, shares)
 
 		// A converted operation shows both sides, so the figures can be checked
 		// against the bank statement.
@@ -157,13 +172,7 @@ func txCard(t storage.Transaction, balance *int64, fresh bool) (string, *models.
 				rateLine(t.OriginalCurrency, t.AccountCurr, *t.Rate))
 		}
 
-		cat := t.CategoryName
-		if cat == "" {
-			cat = "no category"
-		} else if t.CategoryEmoji != "" {
-			cat = t.CategoryEmoji + " " + cat
-		}
-		fmt.Fprintf(&b, "Category: %s\n", esc(cat))
+		fmt.Fprintf(&b, "Category: %s\n", esc(categoryLabel(t)))
 		if t.Source != "" {
 			fmt.Fprintf(&b, "Source: %s\n", esc(t.Source))
 		}
@@ -185,11 +194,25 @@ func txCard(t storage.Transaction, balance *int64, fresh bool) (string, *models.
 		},
 	}
 	if t.Kind == storage.KindTransfer {
-		rows = append(rows, []models.InlineKeyboardButton{
-			btn("💳 From / To", fmt.Sprintf("txacc:%d", t.ID)),
-			btn("📝 Note", fmt.Sprintf("txnote:%d", t.ID)),
-		})
+		fee := "💸 Add a fee"
+		if t.Fee > 0 {
+			fee = "💸 The fee"
+		}
+		rows = append(rows,
+			[]models.InlineKeyboardButton{
+				btn("💳 From / To", fmt.Sprintf("txacc:%d", t.ID)),
+				btn("📝 Note", fmt.Sprintf("txnote:%d", t.ID)),
+			},
+			[]models.InlineKeyboardButton{btn(fee, fmt.Sprintf("txfee:%d", t.ID))})
 	} else {
+		last := btn("▶️ Continue", fmt.Sprintf("txcont:%d", t.ID))
+		if t.FeeOf != nil {
+			last = btn("🔁 The transfer", fmt.Sprintf("txshow:%d", *t.FeeOf))
+		}
+		lastRow := []models.InlineKeyboardButton{last}
+		if splittable(t) && len(shares) == 0 {
+			lastRow = append(lastRow, btn("👥 Split the bill", fmt.Sprintf("split:%d", t.ID)))
+		}
 		rows = append(rows,
 			[]models.InlineKeyboardButton{
 				btn("🏷 Category", fmt.Sprintf("txcat:%d", t.ID)),
@@ -199,11 +222,36 @@ func txCard(t storage.Transaction, balance *int64, fresh bool) (string, *models.
 				btn("🧑 Source", fmt.Sprintf("txsrc:%d", t.ID)),
 				btn("📝 Note", fmt.Sprintf("txnote:%d", t.ID)),
 			},
-			[]models.InlineKeyboardButton{btn("▶️ Continue", fmt.Sprintf("txcont:%d", t.ID))},
+			lastRow,
 		)
 	}
 	rows = append(rows, []models.InlineKeyboardButton{btn("🗑 Delete", fmt.Sprintf("txdel:%d", t.ID))})
 	return b.String(), inline(rows...)
+}
+
+// writeShares lists who owes what of a split bill, and where each share stands.
+func writeShares(b *strings.Builder, t storage.Transaction, shares []storage.Loan) {
+	if len(shares) == 0 {
+		return
+	}
+	total := t.Amount
+	for _, l := range shares {
+		total += l.Principal
+	}
+	fmt.Fprintf(b, "👥 Bill: %s, split:\n", money.FormatCode(total, t.Decimals, t.AccountCurr))
+	for _, l := range shares {
+		name, _, _ := strings.Cut(l.Name, " · ")
+		var state string
+		switch {
+		case l.PaidOff() && l.Forgiven == l.Principal:
+			state = "🕊 forgiven"
+		case l.PaidOff():
+			state = "✅ settled"
+		default:
+			state = "owes " + money.Format(l.Outstanding(), l.Decimals)
+		}
+		fmt.Fprintf(b, "  • %s — %s · %s\n", esc(name), money.Format(l.Principal, l.Decimals), state)
+	}
 }
 
 // loanTxCard is the card of an operation that belongs to a debt or a loan: what
@@ -212,21 +260,23 @@ func txCard(t storage.Transaction, balance *int64, fresh bool) (string, *models.
 func loanTxCard(t storage.Transaction, balance *int64) (string, *models.InlineKeyboardMarkup) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "✅ <b>%s</b>\n\n", loanOpTitle(t))
-	sign, mark := "−", "📤"
-	switch t.Kind {
-	case storage.KindDebtIn:
-		sign, mark = "+", "📥"
-	case storage.KindExpense:
-		mark = "💸" // a payment that is spending looks like any other expense
-	}
-	fmt.Fprintf(&b, "%s <b>%s%s</b>\n", mark, sign, money.FormatCode(t.Amount, t.Decimals, t.AccountCurr))
-	if t.Interest != nil && *t.Interest > 0 {
-		fmt.Fprintf(&b, "Of it interest: %s\n", money.FormatCode(*t.Interest, t.Decimals, t.AccountCurr))
-	}
-	fmt.Fprintf(&b, "%s %s\n", loanEmoji(t.LoanKind), esc(t.LoanName))
-	fmt.Fprintf(&b, "Account: %s %s · %s\n", placeEmoji(t.AccountName), esc(t.AccountName), t.AccountCurr)
-	if balance != nil {
-		fmt.Fprintf(&b, "Balance: <b>%s</b>\n", money.FormatCode(*balance, t.Decimals, t.AccountCurr))
+	if t.Forgiven {
+		// Nothing moved, so there is no account or balance to show — only what
+		// it counts as.
+		fmt.Fprintf(&b, "🕊 <b>%s</b>\n", money.FormatCode(t.Amount, t.Decimals, t.AccountCurr))
+		fmt.Fprintf(&b, "%s %s\n", loanEmoji(t.LoanKind), esc(t.LoanName))
+		if t.Kind == storage.KindExpense {
+			counted := "spending"
+			if t.CategoryName != "" {
+				counted += " · " + categoryLabel(t)
+			}
+			fmt.Fprintf(&b, "Counted as: %s\n", esc(counted))
+		} else {
+			b.WriteString("Counted as: income\n")
+		}
+		b.WriteString("<i>No money moved, so no balance changed.</i>\n")
+	} else {
+		writeLoanMovement(&b, t, balance)
 	}
 	if t.Note != "" {
 		fmt.Fprintf(&b, "Note: %s\n", esc(t.Note))
@@ -246,9 +296,33 @@ func loanTxCard(t storage.Transaction, balance *int64) (string, *models.InlineKe
 	)
 }
 
+// writeLoanMovement is what a loan's operation did to the account.
+func writeLoanMovement(b *strings.Builder, t storage.Transaction, balance *int64) {
+	sign, mark := "−", "📤"
+	switch t.Kind {
+	case storage.KindDebtIn:
+		sign, mark = "+", "📥"
+	case storage.KindExpense:
+		mark = "💸" // a payment that is spending looks like any other expense
+	}
+	fmt.Fprintf(b, "%s <b>%s%s</b>\n", mark, sign, money.FormatCode(t.Amount, t.Decimals, t.AccountCurr))
+	if t.Interest != nil && *t.Interest > 0 {
+		fmt.Fprintf(b, "Of it interest: %s\n", money.FormatCode(*t.Interest, t.Decimals, t.AccountCurr))
+	}
+	fmt.Fprintf(b, "%s %s\n", loanEmoji(t.LoanKind), esc(t.LoanName))
+	fmt.Fprintf(b, "Account: %s %s · %s\n", placeEmoji(t.AccountName), esc(t.AccountName), t.AccountCurr)
+	if balance != nil {
+		fmt.Fprintf(b, "Balance: <b>%s</b>\n", money.FormatCode(*balance, t.Decimals, t.AccountCurr))
+	}
+}
+
 // loanOpTitle names what an operation did to its loan.
 func loanOpTitle(t storage.Transaction) string {
 	switch {
+	case t.Forgiven && t.LoanKind == storage.LoanLent:
+		return "Debt forgiven"
+	case t.Forgiven:
+		return "Debt let off"
 	case t.LoanKind == storage.LoanLent && t.Kind == storage.KindDebtOut:
 		return "Lent"
 	case t.LoanKind == storage.LoanLent:
@@ -275,9 +349,12 @@ func operationsKeyboard(txs []storage.Transaction, loc *time.Location) *models.I
 	buttons := make([]models.InlineKeyboardButton, 0, len(shown))
 	for _, t := range shown {
 		sign := "−"
-		if t.Kind == storage.KindIncome || t.Kind == storage.KindDebtIn {
+		switch {
+		case t.Forgiven:
+			sign = "🕊"
+		case t.Kind == storage.KindIncome || t.Kind == storage.KindDebtIn:
 			sign = "+"
-		} else if t.Kind == storage.KindTransfer {
+		case t.Kind == storage.KindTransfer:
 			sign = "🔁"
 		}
 		label := fmt.Sprintf("%s %s%s", t.OccurredAt.In(loc).Format("02.01"), sign,

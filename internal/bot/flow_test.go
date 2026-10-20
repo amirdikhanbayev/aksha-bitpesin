@@ -624,6 +624,8 @@ func TestTransferBetweenCurrencies(t *testing.T) {
 	p.say("470")
 	p.sees("Crediting 114.89 USD")
 	p.sees("your rate: 1 USD = 470 KZT")
+	p.sees("Was there a fee for the transfer?")
+	p.tap("✅ No fee")
 
 	last, _ := st.LastTransactions(ctx, u.ID, 1)
 	got := last[0]
@@ -1404,6 +1406,7 @@ func TestCorrectAmountOfATransfer(t *testing.T) {
 	p.tap("💳 Card · USD")
 	p.tap("1 USD = ? KZT")
 	p.say("470")
+	p.tap("✅ No fee")
 	p.sees("Transfer recorded")
 
 	p.tap("💰 Amount")
@@ -1972,7 +1975,7 @@ func TestPlaceOperations(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.CreateTransfer(ctx, u.ID, kaspi.ID, cash.ID, 1_000_00, nil, nil, "", now); err != nil {
+	if _, err := st.CreateTransfer(ctx, u.ID, kaspi.ID, cash.ID, 1_000_00, nil, nil, "", now, 0, ""); err != nil {
 		t.Fatal(err)
 	}
 

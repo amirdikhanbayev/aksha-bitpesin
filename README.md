@@ -97,6 +97,8 @@ The first tap says what kind of operation it is, and the rest follows its logic.
 | Backdate an operation | **📅 Date** on its card: today, yesterday, 2 days ago… |
 | Correct anything about an operation | its card: **💰 Amount**, **📅 Date**, **🏷 Category**, **💳 Account**, **🧑 Source**, **📝 Note** |
 | Record the same thing again | **🔁 Again** on a card: same category, account and source, only the amount is new |
+| Record a transfer's fee | the last step of a transfer: **％ In percent** or **💵 Fixed amount** (or **💸 Add a fee** on its card later) |
+| Split a bill you paid for everyone | **👥 Split the bill** on the expense's card |
 | Find something | **🔍 Search**: `magnum`, `> 50000`, `coffee 1000-5000` |
 | Rename or retire a category | ⚙️ Settings → 🏷 Categories → ✏️ Edit |
 | Create an account | the place → the currencies it holds → the balance of each |
@@ -179,9 +181,28 @@ Payment: 50,000 KZT on the 15th · about 11 left
 [💳 Make a payment]  [🧾 History]  [✏️ Correct what's owed]  [🗑 Delete]
 ```
 
+#### 👥 Split bills
+
+Paid the whole dinner? Tap **👥 Split the bill** on the expense's card, pick who shared it (names used before are buttons; type new ones, several at once with commas), then split **equally**, **only between them**, or **share by share**. The expense keeps only your share, since that's what you spent. Each other share becomes its own 🤝 debt (`Aidar · Navat`), and each is paid back to whichever account the money arrives on.
+
+```
+👥 Bill split · 30,000 KZT
+Your share: 10,000 KZT
+• Aidar owes you 10,000 KZT
+• Dana owes you 10,000 KZT
+```
+
+#### 🕊 Forgiving a debt
+
+A debt between people can be let go, in part or in full: **🕊 Forgive** on its card (or **🕊 I was let off** when you owed it). No money moves and no balance changes. Forgiving money you lent counts as **spending**, filed under the bill's category when it was a share of a split bill. Being let off counts as **income**.
+
+#### 🏦 Bank loans
+
 For a bank loan, the bot asks **how much of a payment was interest** instead of computing a schedule that would drift from the bank's. You can also record a payment as a usual **➖ Expense**: after you enter the amount, the category step offers **🏦 It's a loan or debt payment**. On the payment day you get a reminder (from 10:00) with a **💳 Record the payment** button.
 
-What counts as spending depends on where the money went:
+#### What counts as spending
+
+It depends on where the money went:
 
 | | Spending? |
 |---|---|
@@ -189,6 +210,8 @@ What counts as spending depends on where the money went:
 | Repaying the principal of a credit that landed on your account | No. What you bought with it was already recorded |
 | An installment or mortgage payment | **Yes**, each payment |
 | Interest on any bank loan | **Yes** |
+| A debt you forgave | **Yes**, when you forgive it (being let off one is income) |
+| A transfer's fee | **Yes**. The transfer itself isn't |
 
 ### 🧩 Everything else
 
@@ -426,8 +449,8 @@ resource/schema.sql the first draft of the schema, kept for reference only
 - `currencies`: reference table with decimal places
 - `accounts`: one row per place and currency (`UNIQUE (user_id, name, currency)`), each with its own starting balance
 - `categories`: only the user's own; nothing is seeded
-- `transactions`: income, expense, transfers, and `debt_in` / `debt_out`. `original_amount` / `original_currency` / `rate` hold what a converted operation actually cost. `loan_id` / `interest` tie a payment to a loan
-- `loans`: kind, name, currency, starting amount, account, monthly payment and day. What is owed now is never stored; it's worked out from linked operations
+- `transactions`: income, expense, transfers, and `debt_in` / `debt_out`. `original_amount` / `original_currency` / `rate` hold what a converted operation actually cost. `loan_id` / `interest` tie a payment to a loan. `fee_of` marks an expense as the fee of a transfer. `forgiven` marks a debt let go: it counts as an expense or income, but is left out of every balance
+- `loans`: kind, name, currency, starting amount, account, monthly payment and day. What is owed now is never stored; it's worked out from linked operations. `split_of` points a share of a split bill at the bill
 - `exchange_rates`: market rates by date, used only for the estimated summary line
 - `budgets`: monthly limits per category
 - `recurring`: scheduled operations

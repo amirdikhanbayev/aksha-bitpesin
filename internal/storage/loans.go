@@ -59,9 +59,14 @@ type Loan struct {
 	LastReminded   *time.Time
 
 	// Worked out from the linked operations.
-	Repaid       int64      // principal paid back so far
-	PaidTotal    int64      // everything paid on it, interest included
+	// The split bill this is a share of, when it is one (see SplitTransaction).
+	SplitOf *int64
+
+	// Worked out from the linked operations.
+	Repaid       int64      // principal settled so far: paid back or forgiven
+	PaidTotal    int64      // everything paid on it, interest included; forgiven not
 	InterestPaid int64      // the interest part of the payments
+	Forgiven     int64      // how much of it was let go
 	Payments     int        // how many repayments
 	LastPayment  *time.Time // when the last one was
 }
@@ -74,6 +79,10 @@ func (l Loan) PaidOff() bool { return l.Outstanding() <= 0 }
 
 // OwedToMe reports whether the money is owed to the user rather than by them.
 func (l Loan) OwedToMe() bool { return l.Kind == LoanLent }
+
+// Forgivable reports whether the debt can be let go: only one between people —
+// a bank doesn't forgive.
+func (l Loan) Forgivable() bool { return !l.FromBank() }
 
 // FromBank reports whether this is owed to a bank or a shop, with a schedule
 // and, possibly, interest — as opposed to a debt between people.
@@ -89,20 +98,25 @@ func (l Loan) FromBank() bool {
 func (l Loan) ThroughAccount() bool { return l.AccountID != nil }
 
 // repayment is the condition, in SQL, for an operation that pays a loan down:
-// money back to the user on a loan they gave, money paid on any other. The
-// operation that opened the loan goes the other way and is not counted.
-const repayment = `(CASE WHEN l.kind = 'lent' THEN t.kind = 'debt_in'
-                         ELSE t.kind IN ('debt_out','expense') END)`
+// money back to the user on a loan they gave, money paid on any other, and a
+// part of it forgiven either way. The operation that opened the loan goes the
+// other way and is not counted.
+const repayment = `(t.forgiven OR CASE WHEN l.kind = 'lent' THEN t.kind = 'debt_in'
+                                      ELSE t.kind IN ('debt_out','expense') END)`
+
+// paid is a repayment where money actually moved.
+const paid = `(` + repayment + ` AND NOT t.forgiven)`
 
 const loanSelect = `
 	SELECT l.id, l.user_id, l.kind, l.name, l.currency, cur.decimals, l.principal,
 	       l.account_id, l.monthly_payment, l.payment_day, COALESCE(l.note,''),
-	       l.opened_at, l.last_reminded,
+	       l.opened_at, l.last_reminded, l.split_of,
 	       COALESCE(SUM(t.amount - COALESCE(t.interest,0)) FILTER (WHERE ` + repayment + `), 0),
-	       COALESCE(SUM(t.amount) FILTER (WHERE ` + repayment + `), 0),
-	       COALESCE(SUM(t.interest) FILTER (WHERE ` + repayment + `), 0),
-	       COUNT(t.id) FILTER (WHERE ` + repayment + ` AND COALESCE(t.interest,0) < t.amount),
-	       MAX(t.occurred_at) FILTER (WHERE ` + repayment + `)
+	       COALESCE(SUM(t.amount) FILTER (WHERE ` + paid + `), 0),
+	       COALESCE(SUM(t.interest) FILTER (WHERE ` + paid + `), 0),
+	       COALESCE(SUM(t.amount) FILTER (WHERE t.forgiven), 0),
+	       COUNT(t.id) FILTER (WHERE ` + paid + ` AND COALESCE(t.interest,0) < t.amount),
+	       MAX(t.occurred_at) FILTER (WHERE ` + paid + `)
 	FROM loans l
 	JOIN currencies cur ON cur.code = l.currency
 	LEFT JOIN transactions t ON t.loan_id = l.id AND t.deleted_at IS NULL`
@@ -113,8 +127,8 @@ func scanLoan(row pgx.Row) (Loan, error) {
 	var l Loan
 	var day *int16
 	err := row.Scan(&l.ID, &l.UserID, &l.Kind, &l.Name, &l.Currency, &l.Decimals, &l.Principal,
-		&l.AccountID, &l.MonthlyPayment, &day, &l.Note, &l.OpenedAt, &l.LastReminded,
-		&l.Repaid, &l.PaidTotal, &l.InterestPaid, &l.Payments, &l.LastPayment)
+		&l.AccountID, &l.MonthlyPayment, &day, &l.Note, &l.OpenedAt, &l.LastReminded, &l.SplitOf,
+		&l.Repaid, &l.PaidTotal, &l.InterestPaid, &l.Forgiven, &l.Payments, &l.LastPayment)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return l, ErrNotFound
 	}
@@ -299,16 +313,32 @@ func (s *Store) SetLoanOutstanding(ctx context.Context, userID, id, outstanding 
 
 // DeleteLoan removes a loan together with its operations — soft-deleted, like
 // any operation, so balances go back to what they were without it.
+//
+// A share of a split bill goes back into the bill: the whole bill still left the
+// account, and with nobody owing that part, it was the user's own spending. A
+// bill split entirely among others was put away when it was split, and comes
+// back with the first share returned to it.
 func (s *Store) DeleteLoan(ctx context.Context, userID, id int64) error {
 	return s.InTx(ctx, func(tx pgx.Tx) error {
-		ct, err := tx.Exec(ctx,
-			`UPDATE loans SET deleted_at = now() WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL`,
-			id, userID)
+		var splitOf *int64
+		var principal int64
+		err := tx.QueryRow(ctx,
+			`UPDATE loans SET deleted_at = now() WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
+			 RETURNING split_of, principal`, id, userID).Scan(&splitOf, &principal)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
 		if err != nil {
 			return err
 		}
-		if ct.RowsAffected() == 0 {
-			return ErrNotFound
+		if splitOf != nil {
+			if _, err := tx.Exec(ctx,
+				`UPDATE transactions
+				 SET amount = CASE WHEN deleted_at IS NULL THEN amount + $3 ELSE $3 END,
+				     deleted_at = NULL
+				 WHERE id = $1 AND user_id = $2`, *splitOf, userID, principal); err != nil {
+				return err
+			}
 		}
 		_, err = tx.Exec(ctx,
 			`UPDATE transactions SET deleted_at = now()
@@ -373,15 +403,17 @@ type LoanPeriodSum struct {
 	Out      int64 // money that left the user's accounts: lent, repaid, paid
 	In       int64 // money that came in: borrowed, paid back
 	Interest int64 // the interest part of the payments
+	Forgiven int64 // let go, with no money moving
 }
 
 // LoansInPeriod sums each loan's operations over a period.
 func (s *Store) LoansInPeriod(ctx context.Context, userID int64, from, to time.Time) ([]LoanPeriodSum, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT l.id, l.kind, l.name, l.currency, cur.decimals,
-		       COALESCE(SUM(t.amount) FILTER (WHERE t.kind IN ('debt_out','expense')), 0),
+		       COALESCE(SUM(t.amount) FILTER (WHERE t.kind IN ('debt_out','expense') AND NOT t.forgiven), 0),
 		       COALESCE(SUM(t.amount) FILTER (WHERE t.kind = 'debt_in'), 0),
-		       COALESCE(SUM(t.interest), 0)
+		       COALESCE(SUM(t.interest), 0),
+		       COALESCE(SUM(t.amount) FILTER (WHERE t.forgiven), 0)
 		FROM transactions t
 		JOIN loans l ON l.id = t.loan_id
 		JOIN currencies cur ON cur.code = l.currency
@@ -397,10 +429,235 @@ func (s *Store) LoansInPeriod(ctx context.Context, userID int64, from, to time.T
 	for rows.Next() {
 		var x LoanPeriodSum
 		if err := rows.Scan(&x.LoanID, &x.Kind, &x.Name, &x.Currency, &x.Decimals,
-			&x.Out, &x.In, &x.Interest); err != nil {
+			&x.Out, &x.In, &x.Interest, &x.Forgiven); err != nil {
 			return nil, err
 		}
 		out = append(out, x)
+	}
+	return out, rows.Err()
+}
+
+// ForgiveLoan lets go of amount of a debt between people, and returns the
+// operation that records it. No money moves, so no balance changes; what it is
+// for the books depends on who forgave whom:
+//
+//   - forgiving money lent: it is not coming back, so it is spending — filed
+//     under the bill's category when the debt is a share of a split bill;
+//   - being let off a debt: money kept that was going to be paid, so income.
+//
+// The operation is counted in the loan's currency, through its account — or,
+// for a loan that never touched one, the first account in that currency.
+func (s *Store) ForgiveLoan(ctx context.Context, userID, loanID, amount int64, at time.Time) (Transaction, error) {
+	l, err := s.Loan(ctx, userID, loanID)
+	if err != nil {
+		return Transaction{}, err
+	}
+	if !l.Forgivable() {
+		return Transaction{}, fmt.Errorf("only a debt between people can be forgiven")
+	}
+	if amount <= 0 {
+		return Transaction{}, fmt.Errorf("the amount must be greater than zero")
+	}
+	if amount > l.Outstanding() {
+		return Transaction{}, fmt.Errorf("that is more than is owed")
+	}
+	t := Transaction{UserID: userID, Kind: KindIncome, Amount: amount, Source: l.Name,
+		OccurredAt: at, LoanID: &l.ID, Forgiven: true}
+	if l.OwedToMe() {
+		t.Kind = KindExpense
+	}
+	if l.AccountID != nil {
+		t.AccountID = *l.AccountID
+	} else {
+		err := s.pool.QueryRow(ctx,
+			`SELECT id FROM accounts WHERE user_id = $1 AND currency = $2
+			 ORDER BY archived, id LIMIT 1`, userID, l.Currency).Scan(&t.AccountID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Transaction{}, fmt.Errorf("there is no account in %s to count it in", l.Currency)
+		}
+		if err != nil {
+			return Transaction{}, err
+		}
+	}
+	if l.SplitOf != nil && l.OwedToMe() {
+		// The share was part of what the bill paid for, so it is spent on the same thing.
+		err := s.pool.QueryRow(ctx,
+			`SELECT category_id FROM transactions WHERE id = $1 AND user_id = $2`,
+			*l.SplitOf, userID).Scan(&t.CategoryID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return Transaction{}, err
+		}
+	}
+	id, err := insertTransaction(ctx, s.pool, t)
+	if err != nil {
+		return Transaction{}, err
+	}
+	return s.Transaction(ctx, userID, id)
+}
+
+// Share is one person's part of a split bill.
+type Share struct {
+	Name   string
+	Amount int64 // in the bill's account's currency
+}
+
+// SplitTransaction divides an expense the user paid in full: each share is owed
+// back by someone, and what is left is the user's own.
+//
+// Each share becomes a debt of its own — money lent from the bill's account, at
+// the bill's moment, named after the person and what the bill was for — so it
+// is paid back, or forgiven, like any other. The expense keeps only the user's
+// share. When nothing is left of it (the user paid entirely for others), it is
+// put away: it was all lending. Either way the account loses the whole bill, as
+// it did.
+func (s *Store) SplitTransaction(ctx context.Context, userID, txID int64, shares []Share) ([]Loan, error) {
+	if len(shares) == 0 {
+		return nil, fmt.Errorf("nobody to split with")
+	}
+	var total int64
+	for _, sh := range shares {
+		if sh.Amount <= 0 {
+			return nil, fmt.Errorf("every share must be greater than zero")
+		}
+		if sh.Name == "" {
+			return nil, fmt.Errorf("every share needs a name")
+		}
+		total += sh.Amount
+	}
+	var ids []int64
+	err := s.InTx(ctx, func(tx pgx.Tx) error {
+		var (
+			kind, currency, label string
+			amount, accountID     int64
+			at                    time.Time
+			loanID, feeOf         *int64
+			converted             bool
+		)
+		err := tx.QueryRow(ctx,
+			`SELECT t.kind, t.amount, t.account_id, a.currency, t.occurred_at, t.loan_id, t.fee_of,
+			        t.original_currency IS NOT NULL,
+			        COALESCE(t.source, c.name, '')
+			 FROM transactions t
+			 JOIN accounts a ON a.id = t.account_id
+			 LEFT JOIN categories c ON c.id = t.category_id
+			 WHERE t.id = $1 AND t.user_id = $2 AND t.deleted_at IS NULL
+			 FOR UPDATE OF t`, txID, userID).
+			Scan(&kind, &amount, &accountID, &currency, &at, &loanID, &feeOf, &converted, &label)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		switch {
+		case kind != KindExpense || loanID != nil || feeOf != nil:
+			return fmt.Errorf("only an ordinary expense can be split")
+		case converted:
+			return fmt.Errorf("an expense in another currency can't be split")
+		case total > amount:
+			return fmt.Errorf("the shares add up to more than the bill")
+		}
+		var already bool
+		if err := tx.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM loans WHERE split_of = $1 AND deleted_at IS NULL)`,
+			txID).Scan(&already); err != nil {
+			return err
+		}
+		if already {
+			return fmt.Errorf("this bill is already split")
+		}
+
+		if total == amount {
+			_, err = tx.Exec(ctx, `UPDATE transactions SET deleted_at = now() WHERE id = $1`, txID)
+		} else {
+			_, err = tx.Exec(ctx, `UPDATE transactions SET amount = amount - $2 WHERE id = $1`, txID, total)
+		}
+		if err != nil {
+			return err
+		}
+
+		for _, sh := range shares {
+			name := sh.Name
+			if label != "" {
+				name += " · " + label
+			}
+			if r := []rune(name); len(r) > 60 {
+				name = string(r[:59]) + "…"
+			}
+			var id int64
+			if err := tx.QueryRow(ctx,
+				`INSERT INTO loans (user_id, kind, name, currency, principal, account_id, opened_at, split_of)
+				 VALUES ($1, 'lent', $2, $3, $4, $5, $6, $7)
+				 RETURNING id`,
+				userID, name, currency, sh.Amount, accountID, at, txID).Scan(&id); err != nil {
+				return err
+			}
+			if _, err := insertTransaction(ctx, tx, Transaction{
+				UserID: userID, AccountID: accountID, Kind: KindDebtOut, Amount: sh.Amount,
+				Source: name, OccurredAt: at, LoanID: &id,
+			}); err != nil {
+				return err
+			}
+			ids = append(ids, id)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Loan, 0, len(ids))
+	for _, id := range ids {
+		l, err := s.Loan(ctx, userID, id)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, nil
+}
+
+// SplitLoans lists the debts a bill was split into, in the order they were made.
+func (s *Store) SplitLoans(ctx context.Context, userID, txID int64) ([]Loan, error) {
+	rows, err := s.pool.Query(ctx,
+		loanSelect+` WHERE l.user_id = $1 AND l.split_of = $2 AND l.deleted_at IS NULL`+loanGroup+
+			` ORDER BY l.id`, userID, txID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Loan
+	for rows.Next() {
+		l, err := scanLoan(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+// SplitPeople are the names the user has split bills with or lent to and
+// borrowed from, most recent first — offered as buttons when splitting.
+func (s *Store) SplitPeople(ctx context.Context, userID int64, limit int) ([]string, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT name FROM (
+		     SELECT CASE WHEN split_of IS NULL THEN name ELSE split_part(name, ' · ', 1) END AS name,
+		            opened_at
+		     FROM loans
+		     WHERE user_id = $1 AND deleted_at IS NULL AND kind IN ('lent','borrowed')
+		 ) p
+		 GROUP BY name ORDER BY MAX(opened_at) DESC LIMIT $2`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		out = append(out, name)
 	}
 	return out, rows.Err()
 }

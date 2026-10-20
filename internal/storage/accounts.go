@@ -53,6 +53,7 @@ func (s *Store) ListAccounts(ctx context.Context, userID int64, withArchived boo
 }
 
 // ListAccountsWithBalance computes the balance: initial + income − expenses ± transfers ± debts.
+// A forgiven debt moves no money, so it is left out.
 func (s *Store) ListAccountsWithBalance(ctx context.Context, userID int64, withArchived bool) ([]Account, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT a.id, a.user_id, a.name, a.currency, a.initial_balance, a.archived, cur.decimals,
@@ -62,7 +63,8 @@ func (s *Store) ListAccountsWithBalance(ctx context.Context, userID int64, withA
 		                                WHEN 'debt_in' THEN t.amount
 		                                ELSE -t.amount END)
 		                   FROM transactions t
-		                   WHERE t.account_id = a.id AND t.deleted_at IS NULL), 0)
+		                   WHERE t.account_id = a.id AND t.deleted_at IS NULL
+		                     AND NOT t.forgiven), 0)
 		       + COALESCE((SELECT SUM(COALESCE(t.to_amount, t.amount))
 		                   FROM transactions t
 		                   WHERE t.to_account_id = a.id AND t.deleted_at IS NULL), 0) AS balance
@@ -159,7 +161,8 @@ func (s *Store) AccountBalance(ctx context.Context, userID, accountID int64) (in
 		                                WHEN 'debt_in' THEN t.amount
 		                                ELSE -t.amount END)
 		                   FROM transactions t
-		                   WHERE t.account_id = a.id AND t.deleted_at IS NULL), 0)
+		                   WHERE t.account_id = a.id AND t.deleted_at IS NULL
+		                     AND NOT t.forgiven), 0)
 		       + COALESCE((SELECT SUM(COALESCE(t.to_amount, t.amount))
 		                   FROM transactions t
 		                   WHERE t.to_account_id = a.id AND t.deleted_at IS NULL), 0)

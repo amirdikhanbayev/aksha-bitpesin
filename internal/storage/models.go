@@ -98,6 +98,15 @@ type Transaction struct {
 	LoanID   *int64
 	Interest *int64
 
+	// A transfer's fee is an expense of its own pointing at the transfer: FeeOf
+	// is set on the fee, Fee on the transfer (the sum of its fees, zero if none).
+	FeeOf *int64
+	Fee   int64
+
+	// Forgiven marks a debt let go: it settles the loan and counts as an expense
+	// (or income) but moves no money, so it is left out of every balance.
+	Forgiven bool
+
 	// Denormalized fields for display
 	AccountName      string
 	AccountCurr      string

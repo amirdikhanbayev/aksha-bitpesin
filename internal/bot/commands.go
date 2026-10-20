@@ -31,6 +31,7 @@ None come with the bot. The first time, you name one in your own words — start
 
 <b>Another currency?</b>
 Tap <b>💱 Another currency</b> before the amount. The bot then asks <b>how much actually left the account, or what rate you got</b> — every bank and exchange has its own rate, and the bot never substitutes one. A transfer between currencies asks the same.
+A transfer ends by asking about a <b>fee</b> — in percent or a fixed amount. It comes out of the source account and counts as spending.
 
 <b>Got it wrong?</b>
 Every operation's card can change anything: <b>💰 Amount</b>, <b>📅 Date</b>, <b>🏷 Category</b>, <b>💳 Account</b>, <b>🧑 Source</b>, <b>📝 Note</b>, <b>🗑 Delete</b>. For something recorded earlier, open 💳 Accounts → <b>🧾 Operations</b> (each account, 15 to a page), /last or 🔍 Search and tap it. Moving an operation to an account in another currency asks for the amount again — the old number wouldn't mean the same there.
@@ -46,8 +47,12 @@ The monthly statement also arrives by itself on the 1st.
 /search magnum · /search &gt; 50000 · /search coffee 1000-5000 — a word, an amount, or both.
 
 <b>🤝 Debts and loans</b>
-Lent someone money, borrowed, bought something in installments, took a credit or a mortgage — add it under <b>🤝 Debts</b> and the bot keeps count of what's left. To pay: open it there and tap <b>💳 Make a payment</b> — or just record a usual <b>➖ Expense</b> and tap <b>🏦 It's a loan or debt payment</b> instead of a category (money paid back to you: <b>➕ Income</b> → <b>🤝 It's a debt paid back to me</b>). A bank loan also asks how much of the payment was interest. Lending and paying back aren't spending; installment and mortgage payments and any interest are, and the statement lists them by name. Set a payment day and you get a reminder that day if it isn't recorded.
+Lent someone money, borrowed, bought something in installments, took a credit or a mortgage — add it under <b>🤝 Debts</b> and the bot keeps count of what's left. To pay: open it there and tap <b>💳 Make a payment</b> — or record a usual <b>➖ Expense</b> and tap <b>🏦 It's a loan or debt payment</b> instead of a category (paid back to you: <b>➕ Income</b> → <b>🤝 It's a debt paid back to me</b>). A bank loan also asks how much was interest. Lending and paying back aren't spending; installment and mortgage payments and interest are. Set a payment day for a reminder.
+<b>🕊 Forgive</b> a debt between people: no money moves, and it counts as spending (or income, if you were let off).
 /debts
+
+<b>👥 Split the bill</b>
+Paid for everyone? Tap it on the expense's card and pick who shares it — equally, only them, or share by share. Your share stays the expense; the others' become debts owed to you, paid back to whichever account the money lands on.
 
 <b>💳 Accounts</b> — balances; add, rename, archive. <b>🧾 Operations</b> there lists each account's incomes and expenses, 15 to a page — tap a number to open one. One place can hold several currencies: cash in tenge and cash in dollars live under the same <b>Cash</b>, each with its own balance.
 
@@ -200,6 +205,10 @@ func (b *Bot) cmdLast(ctx context.Context, u storage.User, chatID int64, args st
 // txLine — one line in the operations list.
 func txLine(t storage.Transaction, loc *time.Location) string {
 	date := t.OccurredAt.In(loc).Format("02.01")
+	if t.Forgiven { // no money moved, so neither a plus nor a minus
+		return fmt.Sprintf("%s 🕊 %s forgiven · %s %s",
+			date, money.FormatCode(t.Amount, t.Decimals, t.AccountCurr), loanEmoji(t.LoanKind), esc(t.LoanName))
+	}
 	switch t.Kind {
 	case storage.KindTransfer:
 		to := money.FormatCode(t.Amount, t.Decimals, t.AccountCurr)
@@ -227,6 +236,9 @@ func txLine(t storage.Transaction, loc *time.Location) string {
 }
 
 func categoryLabel(t storage.Transaction) string {
+	if t.CategoryName == "" && t.FeeOf != nil {
+		return "💸 Transfer fee"
+	}
 	if t.CategoryName == "" && t.LoanName != "" {
 		return loanEmoji(t.LoanKind) + " " + t.LoanName // a loan payment is filed under its loan
 	}
@@ -257,6 +269,12 @@ func (b *Bot) cmdUndo(ctx context.Context, u storage.User, chatID int64) {
 		return
 	}
 	t := txs[0]
+	if t.FeeOf != nil {
+		// A fee is recorded right after its transfer: undoing it means the transfer.
+		if parent, err := b.st.Transaction(ctx, u.ID, *t.FeeOf); err == nil {
+			t = parent
+		}
+	}
 	if err := b.st.DeleteTransaction(ctx, u.ID, t.ID); err != nil {
 		b.fail(ctx, chatID, err)
 		return
